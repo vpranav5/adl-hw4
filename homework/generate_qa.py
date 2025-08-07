@@ -248,7 +248,10 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
 
     questions = []
     #image_file = str(Path(info_path).stem.replace("_info", f"_{view_index:02d}_im.jpg"))
-    image_file = str(Path(info_path).parent / Path(info_path).stem.replace("_info", f"_{view_index:02d}_im.jpg"))
+    #image_file = str(Path(info_path).parent / Path(info_path).stem.replace("_info", f"_{view_index:02d}_im.jpg"))
+
+    split_name = Path(info_path).parent.name  # "train" or "valid"
+    image_file = f"data/{split_name}/{Path(info_path).stem.replace('_info', f'_{view_index:02d}_im.jpg')}"
 
     # 1. Ego car
     questions.append({"image_file": image_file, "question": "What kart is the ego car?", "answer": ego_kart["kart_name"]})
