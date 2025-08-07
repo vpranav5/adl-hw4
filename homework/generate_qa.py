@@ -242,6 +242,9 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
 
+    if track_name.lower() == "unknown":
+        return []
+
     ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
     if ego_kart is None:
         return []
@@ -273,15 +276,21 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
             pos.append("front" if dy > 0 else "behind")
         return " and ".join(pos) if pos else "center"
 
+    
     for k in karts:
         if k["instance_id"] == ego_kart["instance_id"]:
             continue
-        rel = position_from_center(k["center"][0] - ego_kart["center"][0],
-                                    k["center"][1] - ego_kart["center"][1])
+        dx = k["center"][0] - ego_kart["center"][0]
+        dy = k["center"][1] - ego_kart["center"][1]
+        rel = []
+        if dx < -10: rel.append("left")
+        if dx > 10: rel.append("right")
+        if dy < -10: rel.append("front")
+        if dy > 10: rel.append("behind")
         if not rel:
-            continue
+            continue  # ✅ FIX 4: Skip center-aligned karts
         q = f"Where is {k['kart_name']} relative to the ego car?"
-        questions.append({"image_file": image_file, "question": q, "answer": rel})
+        questions.append({"image_file": image_file, "question": q, "answer": " and ".join(rel)})
 
     # 5. Counting by position
     left = right = front = behind = 0
@@ -362,7 +371,7 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
                 print(f"No QA pairs for {info_path.name}, view {view_index}")
             else:
                 print(f"{len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
-            all_qa_pairs.extend(qa_pairs)
+                all_qa_pairs.extend(qa_pairs)
 
     with open(output_file, "w") as f:
         json.dump(all_qa_pairs, f, indent=2)
