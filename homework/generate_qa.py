@@ -242,9 +242,6 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
 
-    if track_name.lower() == "unknown":
-        return []
-
     ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
     if ego_kart is None:
         return []
