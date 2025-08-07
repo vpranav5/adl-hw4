@@ -162,7 +162,7 @@ def extract_kart_objects(
         info = json.load(f)
     karts = []
     detections = info["detections"][view_index]
-    names = info["names"]
+    names = info.get("names", {})
 
     scale_x = img_width / 600
     scale_y = img_height / 400
@@ -178,7 +178,7 @@ def extract_kart_objects(
         center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
         karts.append({
             "instance_id": int(track_id),
-            "kart_name": names[str(int(track_id))],
+            "kart_name": names.get(str(int(track_id)), f"kart_{track_id}"),
             "center": center,
         })
 
