@@ -60,17 +60,12 @@ class VQADatasetForTraining(Dataset):
         ]
         self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
 
-        self.image_root = image_root or (Path("data") / dataset.name)
-
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int) -> dict:
         item = self.dataset[idx]
-        
-        #image = Image.open(item["image_path"]).convert("RGB")
-        image_path = self.image_root / item["image_file"]
-        image = Image.open(image_path).convert("RGB")
+        image = Image.open(item["image_path"]).convert("RGB")
         # Prepare input text in chat format
         input_message = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": item["question"]}]}]
         prompt = self.processor.apply_chat_template(input_message, add_generation_prompt=True)
@@ -174,14 +169,9 @@ def train(
     model.train()
 
     # Prepare datasets
-    #train_dataset = VQADataset(train_dataset_name, data_dir)
+    train_dataset = VQADataset(train_dataset_name, data_dir)
 
-    #train_dataset = VQADatasetForTraining(train_dataset, processor)
-
-    # Prepare datasets
-    raw_dataset = VQADataset(train_dataset_name, data_dir)
-    image_root = (data_dir or Path("data")) / train_dataset_name
-    train_dataset = VQADatasetForTraining(raw_dataset, processor, image_root=image_root)
+    train_dataset = VQADatasetForTraining(train_dataset, processor)
 
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
