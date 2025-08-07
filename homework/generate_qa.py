@@ -276,21 +276,15 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
             pos.append("front" if dy > 0 else "behind")
         return " and ".join(pos) if pos else "center"
 
-    
     for k in karts:
         if k["instance_id"] == ego_kart["instance_id"]:
             continue
-        dx = k["center"][0] - ego_kart["center"][0]
-        dy = k["center"][1] - ego_kart["center"][1]
-        rel = []
-        if dx < -10: rel.append("left")
-        if dx > 10: rel.append("right")
-        if dy < -10: rel.append("front")
-        if dy > 10: rel.append("behind")
+        rel = position_from_center(k["center"][0] - ego_kart["center"][0],
+                                    k["center"][1] - ego_kart["center"][1])
         if not rel:
-            continue  # ✅ FIX 4: Skip center-aligned karts
+            continue
         q = f"Where is {k['kart_name']} relative to the ego car?"
-        questions.append({"image_file": image_file, "question": q, "answer": " and ".join(rel)})
+        questions.append({"image_file": image_file, "question": q, "answer": rel})
 
     # 5. Counting by position
     left = right = front = behind = 0
@@ -371,7 +365,7 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
                 print(f"No QA pairs for {info_path.name}, view {view_index}")
             else:
                 print(f"{len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
-                all_qa_pairs.extend(qa_pairs)
+            all_qa_pairs.extend(qa_pairs)
 
     with open(output_file, "w") as f:
         json.dump(all_qa_pairs, f, indent=2)
