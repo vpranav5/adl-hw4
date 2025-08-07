@@ -359,7 +359,7 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
     with open(output_file, "w") as f:
         json.dump(all_qa_pairs, f, indent=2)
 
-    print(f"✅ Saved {len(all_qa_pairs)} QA pairs to {output_file}")
+    print(f"Saved {len(all_qa_pairs)} QA pairs to {output_file}")
 
 """
 Usage Example: Visualize QA pairs for a specific file and view:
