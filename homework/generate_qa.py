@@ -354,6 +354,10 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
     for info_path in info_files:
         for view_index in range(num_views):
             qa_pairs = generate_qa_pairs(str(info_path), view_index)
+            if len(qa_pairs) == 0:
+                print(f"[⚠️] No QA pairs for {info_path.name}, view {view_index}")
+            else:
+                print(f"[✅] {len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
             all_qa_pairs.extend(qa_pairs)
 
     with open(output_file, "w") as f:
