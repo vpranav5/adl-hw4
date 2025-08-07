@@ -102,7 +102,9 @@ class CLIP(nn.Module):
         self.vision_encoder = vision_encoder
         self.text_encoder = text_encoder
         # TODO: implement the rest components
-        raise NotImplementedError("Not implemented")
+        self.vision_proj = nn.Linear(vision_encoder.config.hidden_size, proj_dim, bias=False)
+        self.text_proj = nn.Linear(text_encoder.config.hidden_size, proj_dim, bias=False)
+        self.logit_scale = nn.Parameter(torch.tensor(math.log(1 / temperature)))
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
         return self.vision_encoder(image)
@@ -180,7 +182,24 @@ class CLIP(nn.Module):
         Returns:
             TODO: think about the what values should be returned
         """
-        raise NotImplementedError("Not implemented")
+        vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
+        vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+        vision_emb = self.vision_proj(vision_feat)
+
+        text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        eos_token_id = processor.tokenizer.eos_token_id
+        eos_mask = (input_ids == eos_token_id).int()
+        eos_pos = eos_mask.argmax(dim=1)
+        text_feat = text_outputs[torch.arange(input_ids.shape[0]), eos_pos, :]
+        text_emb = self.text_proj(text_feat)
+
+        vision_emb = F.normalize(vision_emb, dim=-1)
+        text_emb = F.normalize(text_emb, dim=-1)
+
+        logit_scale = self.logit_scale.exp()
+        logits_per_image = logit_scale * vision_emb @ text_emb.T
+
+        return vision_emb, text_emb, logits_per_image
 
 
 def compute_clip_loss(
@@ -199,7 +218,12 @@ def compute_clip_loss(
     Returns:
         The loss for the CLIP model.
     """
-    raise NotImplementedError("Not implemented")
+    vision_emb, text_emb, logits_per_image = outputs
+    logits_per_text = logits_per_image.T
+    targets = torch.arange(len(logits_per_image), device=logits_per_image.device)
+    loss_i = F.cross_entropy(logits_per_image, targets)
+    loss_t = F.cross_entropy(logits_per_text, targets)
+    return (loss_i + loss_t) / 2
 
 
 def get_target_modules_for_lora(model: nn.Module) -> list[str]:

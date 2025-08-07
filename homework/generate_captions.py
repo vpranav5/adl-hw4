@@ -5,6 +5,12 @@ from matplotlib import pyplot as plt
 
 from .generate_qa import draw_detections, extract_frame_info
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+import json
+
 
 def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100) -> list:
     """
@@ -22,7 +28,33 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
     # 4. Relative position
     # {kart_name} is {position} of the ego car.
 
-    raise NotImplementedError("Not implemented")
+    karts = extract_kart_objects(info_path, view_index, img_width, img_height)
+    track_name = extract_track_info(info_path)
+    ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
+
+    if ego_kart is None:
+        return []
+
+    captions = []
+    captions.append(f"There are {len(karts)} karts.")
+    captions.append(f"The ego kart is {ego_kart['kart_name']}.")
+    captions.append(f"The track is {track_name}.")
+
+    # Relative descriptions
+    for k in karts:
+        if k["instance_id"] == ego_kart["instance_id"]:
+            continue
+        dx = k["center"][0] - ego_kart["center"][0]
+        dy = k["center"][1] - ego_kart["center"][1]
+        rel = []
+        if dx < -10: rel.append("left")
+        elif dx > 10: rel.append("right")
+        if dy < -10: rel.append("front")
+        elif dy > 10: rel.append("behind")
+        if rel:
+            captions.append(f"{k['kart_name']} is to the {' and '.join(rel)} of the ego car.")
+
+    return [" ".join(captions)]
 
 
 def check_caption(info_file: str, view_index: int):

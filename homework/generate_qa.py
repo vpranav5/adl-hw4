@@ -6,6 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageDraw
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+
 # Define object type mapping
 OBJECT_TYPES = {
     1: "Kart",
@@ -152,7 +158,36 @@ def extract_kart_objects(
         - is_center_kart: Boolean indicating if this is the kart closest to image center
     """
 
-    raise NotImplementedError("Not implemented")
+    with open(info_path) as f:
+        info = json.load(f)
+    karts = []
+    detections = info["detections"][view_index]
+    names = info["names"]
+
+    scale_x = img_width / 600
+    scale_y = img_height / 400
+
+    for det in detections:
+        class_id, track_id, x1, y1, x2, y2 = det
+        if int(class_id) != 1:
+            continue
+        x1_scaled, y1_scaled = x1 * scale_x, y1 * scale_y
+        x2_scaled, y2_scaled = x2 * scale_x, y2 * scale_y
+        if (x2_scaled - x1_scaled) < min_box_size or (y2_scaled - y1_scaled) < min_box_size:
+            continue
+        center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
+        karts.append({
+            "instance_id": int(track_id),
+            "kart_name": names[str(int(track_id))],
+            "center": center,
+        })
+
+    # Mark center kart
+    for k in karts:
+        x, y = k["center"]
+        k["is_center_kart"] = (abs(x - img_width / 2) < 5 and abs(y - img_height / 2) < 5)
+
+    return karts
 
 
 def extract_track_info(info_path: str) -> str:
@@ -166,7 +201,9 @@ def extract_track_info(info_path: str) -> str:
         Track name as a string
     """
 
-    raise NotImplementedError("Not implemented")
+    with open(info_path) as f:
+        info = json.load(f)
+    return info.get("track_name", "Unknown")
 
 
 def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100) -> list:
@@ -202,7 +239,66 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
     # How many karts are in front of the ego car?
     # How many karts are behind the ego car?
 
-    raise NotImplementedError("Not implemented")
+    karts = extract_kart_objects(info_path, view_index, img_width, img_height)
+    track_name = extract_track_info(info_path)
+
+    ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
+    if ego_kart is None:
+        return []
+
+    questions = []
+    image_file = str(Path(info_path).stem.replace("_info", f"_{view_index:02d}_im.jpg"))
+
+    # 1. Ego car
+    questions.append({"image_file": image_file, "question": "What kart is the ego car?", "answer": ego_kart["kart_name"]})
+
+    # 2. Total kart count
+    questions.append({"image_file": image_file, "question": "How many karts are there in the scenario?", "answer": str(len(karts))})
+
+    # 3. Track
+    questions.append({"image_file": image_file, "question": "What track is this?", "answer": track_name})
+
+    # 4. Relative position questions
+    def position_from_center(x, y):
+        dx = x - img_width / 2
+        dy = img_height / 2 - y
+        pos = []
+        if abs(dx) > 10:
+            pos.append("left" if dx < 0 else "right")
+        if abs(dy) > 10:
+            pos.append("front" if dy > 0 else "behind")
+        return " and ".join(pos) if pos else "center"
+
+    for k in karts:
+        if k["instance_id"] == ego_kart["instance_id"]:
+            continue
+        rel = position_from_center(k["center"][0] - ego_kart["center"][0],
+                                    k["center"][1] - ego_kart["center"][1])
+        if not rel:
+            continue
+        q = f"Where is {k['kart_name']} relative to the ego car?"
+        questions.append({"image_file": image_file, "question": q, "answer": rel})
+
+    # 5. Counting by position
+    left = right = front = behind = 0
+    for k in karts:
+        if k["instance_id"] == ego_kart["instance_id"]:
+            continue
+        dx = k["center"][0] - ego_kart["center"][0]
+        dy = k["center"][1] - ego_kart["center"][1]
+        if dx < -10: left += 1
+        if dx > 10: right += 1
+        if dy < -10: front += 1
+        if dy > 10: behind += 1
+
+    for direction, count in zip(["left", "right", "front", "behind"], [left, right, front, behind]):
+        questions.append({
+            "image_file": image_file,
+            "question": f"How many karts are to the {direction} of the ego car?",
+            "answer": str(count),
+        })
+
+    return questions
 
 
 def check_qa_pairs(info_file: str, view_index: int):
