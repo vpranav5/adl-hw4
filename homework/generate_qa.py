@@ -336,6 +336,31 @@ def check_qa_pairs(info_file: str, view_index: int):
         print("-" * 50)
 
 
+def generate(split: str = "train", output_file: str = None, num_views: int = 5):
+    """
+    Generate and save QA pairs for all files in a dataset split.
+
+    Args:
+        split: One of 'train', 'valid', etc. (defaults to 'train')
+        output_file: Path to save the output JSON file (default: data/{split}/all_qa_pairs.json)
+        num_views: How many views to process per frame
+    """
+    split_dir = Path("data") / split
+    output_file = output_file or (split_dir / "all_qa_pairs.json")
+
+    all_qa_pairs = []
+
+    info_files = sorted(split_dir.glob("*_info.json"))
+    for info_path in info_files:
+        for view_index in range(num_views):
+            qa_pairs = generate_qa_pairs(str(info_path), view_index)
+            all_qa_pairs.extend(qa_pairs)
+
+    with open(output_file, "w") as f:
+        json.dump(all_qa_pairs, f, indent=2)
+
+    print(f"✅ Saved {len(all_qa_pairs)} QA pairs to {output_file}")
+
 """
 Usage Example: Visualize QA pairs for a specific file and view:
    python generate_qa.py check --info_file ../data/valid/00000_info.json --view_index 0
@@ -345,7 +370,11 @@ You probably need to add additional commands to Fire below.
 
 
 def main():
-    fire.Fire({"check": check_qa_pairs})
+    #fire.Fire({"check": check_qa_pairs})
+    fire.Fire({
+        "check": check_qa_pairs,
+        "generate": generate, 
+    })
 
 
 if __name__ == "__main__":
