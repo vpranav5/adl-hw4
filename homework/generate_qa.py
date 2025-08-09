@@ -268,43 +268,73 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
 
     # for each cart, if center
 
+    # for k in karts:
+    #     if k["instance_id"] == ego_kart["instance_id"]:
+    #         continue
+
+    #     # for 2 karts left and right check their center points
+    #     if (k["center"][0] <  ego_kart["center"][0]) : left,
+    #     if (k["center"][1] - ego_kart["center"][1]
+
+    #     # this should return "left, right, front and behind, very simple it should just be a bunch of if statements"
+
+    #     rel = position_from_center(k["center"][0] - ego_kart["center"][0],
+    #                                 k["center"][1] - ego_kart["center"][1])
+    #     if not rel:
+    #         continue
+    #     q = f"Where is {k['kart_name']} relative to the ego car?"
+    #     questions.append({"image_file": image_file, "question": q, "answer": rel})
+
+    # def position_from_center(x, y):
+    #     dx = x - img_width / 2
+    #     dy = img_height / 2 - y
+
+    #     # cart is on left side of other one, doesn't matter which pos of image so no need to check dx dy
+
+    #     pos = []
+    #     if abs(dx) > 10:
+    #         pos.append("left" if dx < 0 else "right")
+    #     if abs(dy) > 10:
+    #         pos.append("front" if dy > 0 else "behind")
+    #     return " and ".join(pos) if pos else "center"
+
+    # for k in karts:
+    #     if k["instance_id"] == ego_kart["instance_id"]:
+    #         continue
+    #     rel = position_from_center(k["center"][0] - ego_kart["center"][0],
+    #                                 k["center"][1] - ego_kart["center"][1])
+    #     if not rel:
+    #         continue
+    #     q = f"Where is {k['kart_name']} relative to the ego car?"
+    #     questions.append({"image_file": image_file, "question": q, "answer": rel})
+
+    MARGIN = 10  # pixels; must match counting logic below
+
+    # ---- Q4: relative position per kart (vs ego) ----
     for k in karts:
         if k["instance_id"] == ego_kart["instance_id"]:
             continue
 
-        # for 2 karts left and right check their center points
-        if (k["center"][0] <  ego_kart["center"][0]) : left,
-        if (k["center"][1] - ego_kart["center"][1]
+        dx = k["center"][0] - ego_kart["center"][0]
+        dy = k["center"][1] - ego_kart["center"][1]
 
-        # this should return "left, right, front and behind, very simple it should just be a bunch of if statements"
+        rel_parts = []
+        if dx <= -MARGIN:
+            rel_parts.append("left")
+        elif dx >= MARGIN:
+            rel_parts.append("right")
 
-        rel = position_from_center(k["center"][0] - ego_kart["center"][0],
-                                    k["center"][1] - ego_kart["center"][1])
-        if not rel:
+        # y increases downward; negative dy means 'front'
+        if dy <= -MARGIN:
+            rel_parts.append("front")
+        elif dy >= MARGIN:
+            rel_parts.append("behind")
+
+        if not rel_parts:
+            # too close to call; skip noisy label
             continue
-        q = f"Where is {k['kart_name']} relative to the ego car?"
-        questions.append({"image_file": image_file, "question": q, "answer": rel})
 
-    def position_from_center(x, y):
-        dx = x - img_width / 2
-        dy = img_height / 2 - y
-
-        # cart is on left side of other one, doesn't matter which pos of image so no need to check dx dy
-
-        pos = []
-        if abs(dx) > 10:
-            pos.append("left" if dx < 0 else "right")
-        if abs(dy) > 10:
-            pos.append("front" if dy > 0 else "behind")
-        return " and ".join(pos) if pos else "center"
-
-    for k in karts:
-        if k["instance_id"] == ego_kart["instance_id"]:
-            continue
-        rel = position_from_center(k["center"][0] - ego_kart["center"][0],
-                                    k["center"][1] - ego_kart["center"][1])
-        if not rel:
-            continue
+        rel = " and ".join(rel_parts)
         q = f"Where is {k['kart_name']} relative to the ego car?"
         questions.append({"image_file": image_file, "question": q, "answer": rel})
 
@@ -393,7 +423,7 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
         json.dump(all_qa_pairs, f, indent=2)
 
     print(f"Saved {len(all_qa_pairs)} QA pairs to {output_file}")
-    
+
 
 """
 Usage Example: Visualize QA pairs for a specific file and view:
