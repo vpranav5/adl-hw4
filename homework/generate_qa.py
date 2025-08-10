@@ -177,7 +177,7 @@ def extract_kart_objects(
         x2_scaled, y2_scaled = x2 * scale_x, y2 * scale_y
         width, height = (x2_scaled - x1_scaled), (y2_scaled - y1_scaled)
 
-        if int(track_id) != 0 and (w < min_box_size or h < min_box_size):
+        if int(track_id) != 0 and (width < min_box_size or height < min_box_size):
             continue
 
         #center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
