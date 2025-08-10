@@ -30,68 +30,31 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
 
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
-    # ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
+    ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
 
-    # if ego_kart is None:
-    #     return []
-    ego = next((k for k in karts if k.get("is_center_kart", False) or k["instance_id"] == 0), None)
-    if ego is None:
+    if ego_kart is None:
         return []
 
-    MARGIN = 10
-    caps = [
-        f"The track is {track_name}.",
-        f"There are {len(karts)} karts.",
-        f"The ego kart is {ego['kart_name']}." if ego['kart_name'] and not ego['kart_name'].startswith('kart_') else "The ego kart is present."
-    ]
+    captions = []
+    captions.append(f"There are {len(karts)} karts.")
+    captions.append(f"The ego kart is {ego_kart['kart_name']}.")
+    captions.append(f"The track is {track_name}.")
 
-    # def rel(dx, dy):
-    #     parts = []
-    #     if dx <= -MARGIN: parts.append("left")
-    #     elif dx >= MARGIN: parts.append("right")
-    #     if dy <= -MARGIN: parts.append("front")
-    #     elif dy >= MARGIN: parts.append("behind")
-    #     return " and ".join(parts)
-    def rel(dx, dy):
-        horiz = "left" if dx <= -MARGIN else ("right" if dx >= MARGIN else None)
-        vert  = "front" if dy <= -MARGIN else ("back"  if dy >= MARGIN else None)
-        parts = []
-        if vert:  parts.append(vert)
-        if horiz: parts.append(horiz)
-        return " and ".join(parts)
-
+    # Relative descriptions
     for k in karts:
-        if k["instance_id"] == ego["instance_id"]:
+        if k["instance_id"] == ego_kart["instance_id"]:
             continue
-        dx = k["center"][0] - ego["center"][0]
-        dy = k["center"][1] - ego["center"][1]
-        r = rel(dx, dy)
-        if r:
-            caps.append(f"{k['kart_name']} is {r} of the ego car.")
+        dx = k["center"][0] - ego_kart["center"][0]
+        dy = k["center"][1] - ego_kart["center"][1]
+        rel = []
+        if dx < -10: rel.append("left")
+        elif dx > 10: rel.append("right")
+        if dy < -10: rel.append("front")
+        elif dy > 10: rel.append("behind")
+        if rel:
+            captions.append(f"{k['kart_name']} is to the {' and '.join(rel)} of the ego car.")
 
-    # Return multiple short captions so training doesn’t learn verbosity
-    return caps
-
-    # captions = []
-    # captions.append(f"There are {len(karts)} karts.")
-    # captions.append(f"The ego kart is {ego_kart['kart_name']}.")
-    # captions.append(f"The track is {track_name}.")
-
-    # # Relative descriptions
-    # for k in karts:
-    #     if k["instance_id"] == ego_kart["instance_id"]:
-    #         continue
-    #     dx = k["center"][0] - ego_kart["center"][0]
-    #     dy = k["center"][1] - ego_kart["center"][1]
-    #     rel = []
-    #     if dx < -10: rel.append("left")
-    #     elif dx > 10: rel.append("right")
-    #     if dy < -10: rel.append("front")
-    #     elif dy > 10: rel.append("behind")
-    #     if rel:
-    #         captions.append(f"{k['kart_name']} is to the {' and '.join(rel)} of the ego car.")
-
-    # return [" ".join(captions)]
+    return [" ".join(captions)]
 
 
 def check_caption(info_file: str, view_index: int):
