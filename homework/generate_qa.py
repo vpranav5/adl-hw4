@@ -222,7 +222,10 @@ def extract_kart_objects(
         track_id = int(track_id)
 
         # only real karts with known names
-        if class_id != 1 or str(track_id) not in names:
+        # if class_id != 1 or str(track_id) not in names:
+        #     continue
+        # new
+        if (class_id not in (0, 1)) or (str(track_id) not in names):
             continue
 
         x1s, y1s = x1 * scale_x, y1 * scale_y
@@ -343,7 +346,7 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
         })
 
     return qs
-    
+
 # def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100) -> list:
 #     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
 #     track_name = extract_track_info(info_path)
