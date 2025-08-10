@@ -27,11 +27,13 @@ def load(model_name: str = "clip_model"):
 
     from peft import PeftModel
 
-    model_path = Path(__file__).parent / model_name
+    #model_path = Path(__file__).parent / model_name
+    model_path = str((Path(__file__).parent / model_name).resolve())
 
     vlm = BaseVLM()
     vision_encoder = vlm.model.model.vision_model
     text_encoder = vlm.model.model.text_model
+    
     clip = CLIP(vision_encoder, text_encoder)
     clip = PeftModel.from_pretrained(clip, model_path).to(device)
 
