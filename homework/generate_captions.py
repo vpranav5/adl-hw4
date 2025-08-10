@@ -3,7 +3,7 @@ from pathlib import Path
 import fire
 from matplotlib import pyplot as plt
 
-from .generate_qa import draw_detections, extract_frame_info
+from .generate_qa import draw_detections, extract_frame_info, extract_kart_objects, extract_track_info
 
 import torch
 import torch.nn as nn
@@ -30,31 +30,34 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
 
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
-    ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
-
-    if ego_kart is None:
+    ego = next((k for k in karts if k.get("is_center_kart") or k["instance_id"] == 0), None)
+    if ego is None:
         return []
 
-    captions = []
-    captions.append(f"There are {len(karts)} karts.")
-    captions.append(f"The ego kart is {ego_kart['kart_name']}.")
-    captions.append(f"The track is {track_name}.")
+    MARGIN = 6
+    caps = [f"The track is {track_name}.",
+            f"There are {len(karts)} karts."]
+    if not ego["kart_name"].startswith("kart_"):
+        caps.append(f"The ego kart is {ego['kart_name']}.")
 
-    # Relative descriptions
+    def rel(dx, dy):
+        parts = []
+        if dy <= -MARGIN: parts.append("front")
+        elif dy >= MARGIN: parts.append("back")
+        if dx <= -MARGIN: parts.append("left")
+        elif dx >= MARGIN: parts.append("right")
+        return " and ".join(parts)
+
     for k in karts:
-        if k["instance_id"] == ego_kart["instance_id"]:
+        if k["instance_id"] == ego["instance_id"]:
             continue
-        dx = k["center"][0] - ego_kart["center"][0]
-        dy = k["center"][1] - ego_kart["center"][1]
-        rel = []
-        if dx < -10: rel.append("left")
-        elif dx > 10: rel.append("right")
-        if dy < -10: rel.append("front")
-        elif dy > 10: rel.append("behind")
-        if rel:
-            captions.append(f"{k['kart_name']} is to the {' and '.join(rel)} of the ego car.")
+        dx = k["center"][0] - ego["center"][0]
+        dy = k["center"][1] - ego["center"][1]
+        r = rel(dx, dy)
+        if r:
+            caps.append(f"{k['kart_name']} is {r} of the ego car.")
 
-    return [" ".join(captions)]
+    return caps
 
 
 def check_caption(info_file: str, view_index: int):
@@ -79,6 +82,36 @@ def check_caption(info_file: str, view_index: int):
     plt.show()
 
 
+def generate(split: str = "train", output_file: str = None, num_views: int = 5):
+    """
+    Generate and save QA pairs for all files in a dataset split.
+
+    Args:
+        split: One of 'train', 'valid', etc. (defaults to 'train')
+        output_file: Path to save the output JSON file (default: data/{split}/all_qa_pairs.json)
+        num_views: How many views to process per frame
+    """
+    split_dir = Path("data") / split
+    output_file = output_file or (split_dir / "all_qa_pairs.json")
+
+    all_qa_pairs = []
+    info_files = sorted(split_dir.glob("*_info.json"))
+
+    for info_path in info_files:
+        for view_index in range(num_views):
+            qa_pairs = generate_qa_pairs(str(info_path), view_index)
+            if len(qa_pairs) == 0:
+                print(f"No QA pairs for {info_path.name}, view {view_index}")
+            else:
+                print(f"{len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
+            all_qa_pairs.extend(qa_pairs)
+
+    with open(output_file, "w") as f:
+        json.dump(all_qa_pairs, f, indent=2)
+
+    print(f"Saved {len(all_qa_pairs)} QA pairs to {output_file}")
+
+
 """
 Usage Example: Visualize QA pairs for a specific file and view:
    python generate_captions.py check --info_file ../data/valid/00000_info.json --view_index 0
@@ -88,7 +121,7 @@ You probably need to add additional commands to Fire below.
 
 
 def main():
-    fire.Fire({"check": check_caption})
+    fire.Fire({"check": check_caption, "generate": generate})
 
 
 if __name__ == "__main__":
