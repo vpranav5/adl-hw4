@@ -137,76 +137,27 @@ def draw_detections(
     return np.array(pil_image)
 
 
-# def extract_kart_objects(
-#     info_path: str, view_index: int, img_width: int = 150, img_height: int = 100, min_box_size: int = 5
-# ) -> list:
-#     """
-#     Extract kart objects from the info.json file, including their center points and identify the center kart.
-#     Filters out karts that are out of sight (outside the image boundaries).
+def extract_kart_objects(
+    info_path: str, view_index: int, img_width: int = 150, img_height: int = 100, min_box_size: int = 5
+) -> list:
+    """
+    Extract kart objects from the info.json file, including their center points and identify the center kart.
+    Filters out karts that are out of sight (outside the image boundaries).
 
-#     Args:
-#         info_path: Path to the corresponding info.json file
-#         view_index: Index of the view to analyze
-#         img_width: Width of the image (default: 150)
-#         img_height: Height of the image (default: 100)
+    Args:
+        info_path: Path to the corresponding info.json file
+        view_index: Index of the view to analyze
+        img_width: Width of the image (default: 150)
+        img_height: Height of the image (default: 100)
 
-#     Returns:
-#         List of kart objects, each containing:
-#         - instance_id: The track ID of the kart
-#         - kart_name: The name of the kart
-#         - center: (x, y) coordinates of the kart's center
-#         - is_center_kart: Boolean indicating if this is the kart closest to image center
-#     """
+    Returns:
+        List of kart objects, each containing:
+        - instance_id: The track ID of the kart
+        - kart_name: The name of the kart
+        - center: (x, y) coordinates of the kart's center
+        - is_center_kart: Boolean indicating if this is the kart closest to image center
+    """
 
-#     with open(info_path) as f:
-#         info = json.load(f)
-
-#     detections = info["detections"][view_index]
-#     names = info.get("names", {})
-
-#     scale_x = img_width / 600
-#     scale_y = img_height / 400
-
-#     karts = []
-#     for det in detections:
-#         class_id, track_id, x1, y1, x2, y2 = det
-#         if int(class_id) != 1:
-#             continue
-
-#         x1_scaled, y1_scaled = x1 * scale_x, y1 * scale_y
-#         x2_scaled, y2_scaled = x2 * scale_x, y2 * scale_y
-#         width, height = (x2_scaled - x1_scaled), (y2_scaled - y1_scaled)
-
-#         if width < min_box_size or height < min_box_size:
-#             continue
-
-#         center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
-#         #cx, cy = (x1_scaled + x2_scaled) / 2.0, (y1_scaled + y2_scaled) / 2.0
-#         track_label = int(track_id)
-#         kart_name  = names.get(str(track_label), f"kart_{track_label}")
-#         karts.append({
-#             "instance_id": int(track_id),
-#             "kart_name": kart_name,
-#             "center": center
-#         })
-
-#     # Flag ego kart
-#     for k in karts:
-#         k["is_center_kart"] = (k["instance_id"] == 0)
-    
-#     # Fallback: if id 0 not visible in this view, optionally mark the closest to center as ego-ish
-#     if not any(k["is_center_kart"] for k in karts):
-#         img_cx, img_cy = img_width / 2, img_height / 2
-#         if karts:
-#             best = min(karts, key=lambda kk: (kk["center"][0]-img_cx)**2 + (kk["center"][1]-img_cy)**2)
-#             best["is_center_kart"] = True
-
-#     return karts
-
-def extract_kart_objects(info_path: str, view_index: int,
-                         img_width: int = 150, img_height: int = 100,
-                         min_box_size: int = 5) -> list:
-    import json
     with open(info_path) as f:
         info = json.load(f)
 
@@ -219,38 +170,87 @@ def extract_kart_objects(info_path: str, view_index: int,
     karts = []
     for det in detections:
         class_id, track_id, x1, y1, x2, y2 = det
-        class_id = int(class_id); track_id = int(track_id)
-
-        # keep nominal ego (0) and karts (1); drop others
-        if class_id not in (0, 1):
-            continue
-        # only keep ids that map to a real kart name
-        if str(track_id) not in names:
+        if int(class_id) != 1:
             continue
 
-        x1s, y1s = x1 * scale_x, y1 * scale_y
-        x2s, y2s = x2 * scale_x, y2 * scale_y
-        w, h = (x2s - x1s), (y2s - y1s)
-        if w < min_box_size or h < min_box_size:
+        x1_scaled, y1_scaled = x1 * scale_x, y1 * scale_y
+        x2_scaled, y2_scaled = x2 * scale_x, y2 * scale_y
+        width, height = (x2_scaled - x1_scaled), (y2_scaled - y1_scaled)
+
+        if width < min_box_size or height < min_box_size:
             continue
 
-        cx, cy = (x1s + x2s) / 2, (y1s + y2s) / 2
+        center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
+        #cx, cy = (x1_scaled + x2_scaled) / 2.0, (y1_scaled + y2_scaled) / 2.0
+        track_label = int(track_id)
+        kart_name  = names.get(str(track_label), f"kart_{track_label}")
         karts.append({
-            "instance_id": track_id,
-            "kart_name": names[str(track_id)],
-            "center": (cx, cy),
-            "is_nominal_ego": (class_id == 0),
+            "instance_id": int(track_id),
+            "kart_name": kart_name,
+            "center": center
         })
 
-    # choose ego: nominal ego if visible, else nearest to center
-    img_cx, img_cy = img_width / 2, img_height / 2
-    ego = next((k for k in karts if k["is_nominal_ego"]), None)
-    if ego is None and karts:
-        ego = min(karts, key=lambda kk: (kk["center"][0]-img_cx)**2 + (kk["center"][1]-img_cy)**2)
+    # Flag ego kart
     for k in karts:
-        k["is_center_kart"] = (k is ego)
+        k["is_center_kart"] = (k["instance_id"] == 0)
+    
+    # Fallback: if id 0 not visible in this view, optionally mark the closest to center as ego-ish
+    if not any(k["is_center_kart"] for k in karts):
+        img_cx, img_cy = img_width / 2, img_height / 2
+        if karts:
+            best = min(karts, key=lambda kk: (kk["center"][0]-img_cx)**2 + (kk["center"][1]-img_cy)**2)
+            best["is_center_kart"] = True
 
     return karts
+
+# def extract_kart_objects(info_path: str, view_index: int,
+#                          img_width: int = 150, img_height: int = 100,
+#                          min_box_size: int = 5) -> list:
+#     import json
+#     with open(info_path) as f:
+#         info = json.load(f)
+
+#     detections = info["detections"][view_index]
+#     names = info.get("names", {})
+
+#     scale_x = img_width / 600
+#     scale_y = img_height / 400
+
+#     karts = []
+#     for det in detections:
+#         class_id, track_id, x1, y1, x2, y2 = det
+#         class_id = int(class_id); track_id = int(track_id)
+
+#         # keep nominal ego (0) and karts (1); drop others
+#         if class_id not in (0, 1):
+#             continue
+#         # only keep ids that map to a real kart name
+#         if str(track_id) not in names:
+#             continue
+
+#         x1s, y1s = x1 * scale_x, y1 * scale_y
+#         x2s, y2s = x2 * scale_x, y2 * scale_y
+#         w, h = (x2s - x1s), (y2s - y1s)
+#         if w < min_box_size or h < min_box_size:
+#             continue
+
+#         cx, cy = (x1s + x2s) / 2, (y1s + y2s) / 2
+#         karts.append({
+#             "instance_id": track_id,
+#             "kart_name": names[str(track_id)],
+#             "center": (cx, cy),
+#             "is_nominal_ego": (class_id == 0),
+#         })
+
+#     # choose ego: nominal ego if visible, else nearest to center
+#     img_cx, img_cy = img_width / 2, img_height / 2
+#     ego = next((k for k in karts if k["is_nominal_ego"]), None)
+#     if ego is None and karts:
+#         ego = min(karts, key=lambda kk: (kk["center"][0]-img_cx)**2 + (kk["center"][1]-img_cy)**2)
+#     for k in karts:
+#         k["is_center_kart"] = (k is ego)
+
+#     return karts
 
 
 
