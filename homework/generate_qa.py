@@ -160,32 +160,46 @@ def extract_kart_objects(
 
     with open(info_path) as f:
         info = json.load(f)
-    karts = []
+
     detections = info["detections"][view_index]
     names = info.get("names", {})
 
     scale_x = img_width / 600
     scale_y = img_height / 400
 
+    karts = []
     for det in detections:
         class_id, track_id, x1, y1, x2, y2 = det
         if int(class_id) != 1:
             continue
+
         x1_scaled, y1_scaled = x1 * scale_x, y1 * scale_y
         x2_scaled, y2_scaled = x2 * scale_x, y2 * scale_y
-        if (x2_scaled - x1_scaled) < min_box_size or (y2_scaled - y1_scaled) < min_box_size:
+        width, height = (x2_scaled - x1_scaled), (y2_scaled - y1_scaled)
+
+        if int(track_id) != 0 and (w < min_box_size or h < min_box_size):
             continue
-        center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
+
+        #center = ((x1_scaled + x2_scaled) / 2, (y1_scaled + y2_scaled) / 2)
+        cx, cy = (x1_scaled + x2_scaled) / 2.0, (y1_scaled + y2_scaled) / 2.0
         karts.append({
             "instance_id": int(track_id),
-            "kart_name": names.get(str(int(track_id)), f"kart_{track_id}"),
-            "center": center
+            "kart_name": names.get(str(int(track_id)), f"kart_{int(track_id)}"),
+            "center": (cx, cy)
         })
 
     # Mark center kart
+    center_tol = 5
     for k in karts:
         x, y = k["center"]
-        k["is_center_kart"] = (abs(x - img_width / 2) < 5 and abs(y - img_height / 2) < 5)
+        k["is_center_kart"] = (abs(x - img_width/2) < center_tol and abs(y - img_height/2) < center_tol)
+    
+    if not any(k.get("is_center_kart", False) for k in karts):
+        for k in karts:
+            if k["instance_id"] == 0:
+                k["is_center_kart"] = True
+                break
+
 
     return karts
 
@@ -242,25 +256,113 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
 
-    ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
-    if ego_kart is None:
+    # ego_kart = next((k for k in karts if k["is_center_kart"] or k["instance_id"] == 0), None)
+    # if ego_kart is None:
+    #     return []
+
+    ego = next((k for k in karts if k.get("is_center_kart", False) or k["instance_id"] == 0), None)
+    if ego is None:
         return []
 
-    questions = []
+    
+    split_name = Path(info_path).parent.name  # 'train' or 'valid'
+    image_file = f"{split_name}/{Path(info_path).stem.replace('_info', f'_{view_index:02d}_im.jpg')}"
+
+    
     #image_file = str(Path(info_path).stem.replace("_info", f"_{view_index:02d}_im.jpg"))
     #image_file = str(Path(info_path).parent / Path(info_path).stem.replace("_info", f"_{view_index:02d}_im.jpg"))
 
-    split_name = Path(info_path).parent.name  # "train" or "valid"
-    image_file = f"{split_name}/{Path(info_path).stem.replace('_info', f'_{view_index:02d}_im.jpg')}"
+    # split_name = Path(info_path).parent.name  # "train" or "valid"
+    # image_file = f"{split_name}/{Path(info_path).stem.replace('_info', f'_{view_index:02d}_im.jpg')}"
 
-    # 1. Ego car
-    questions.append({"image_file": image_file, "question": "What kart is the ego car?", "answer": ego_kart["kart_name"]})
 
-    # 2. Total kart count
-    questions.append({"image_file": image_file, "question": "How many karts are there in the scenario?", "answer": str(len(karts))})
 
-    # 3. Track
-    questions.append({"image_file": image_file, "question": "What track is this?", "answer": track_name})
+    questions = []
+
+    # # 1. Ego car
+    # questions.append({"image_file": image_file, "question": "What kart is the ego car?", "answer": ego_kart["kart_name"]})
+
+    # # 2. Total kart count
+    # questions.append({"image_file": image_file, "question": "How many karts are there in the scenario?", "answer": str(len(karts))})
+
+    # # 3. Track
+    # questions.append({"image_file": image_file, "question": "What track is this?", "answer": track_name})
+
+    questions.append({
+        "image_file": image_file,
+        "question": "What kart is the ego car? Answer with just the kart name.",
+        "answer": ego["kart_name"],
+    })
+
+    # 2) Total count — force numeric-only
+    questions.append({
+        "image_file": image_file,
+        "question": "How many karts are there in the scenario? Answer with just the number.",
+        "answer": str(len(karts)),
+    })
+
+    # 3) Track — force track string only
+    questions.append({
+        "image_file": image_file,
+        "question": "What track is this? Answer with just the track name.",
+        "answer": track_name,
+    })
+
+    # 4) Relative positions — consistent margin + canonical order (LR then FB)
+    MARGIN = 10
+    def rel_of(dx, dy):
+        parts = []
+        if dx <= -MARGIN:
+            parts.append("left")
+        elif dx >= MARGIN:
+            parts.append("right")
+        if dy <= -MARGIN:
+            parts.append("front")   # y increases down, so negative dy is 'front'
+        elif dy >= MARGIN:
+            parts.append("behind")
+        return " and ".join(parts)
+
+    for k in karts:
+        if k["instance_id"] == ego["instance_id"]:
+            continue
+        dx = k["center"][0] - ego["center"][0]
+        dy = k["center"][1] - ego["center"][1]
+        r = rel_of(dx, dy)
+        if not r:
+            continue
+        questions.append({
+            "image_file": image_file,
+            "question": f"Where is {k['kart_name']} relative to the ego car? Answer with only: left/right/front/behind or a combination like 'left and front'.",
+            "answer": r,
+        })
+
+    
+    left = right = front = behind = 0
+    for k in karts:
+        if k["instance_id"] == ego["instance_id"]:
+            continue
+        dx = k["center"][0] - ego["center"][0]
+        dy = k["center"][1] - ego["center"][1]
+        if dx <= -MARGIN:
+            left += 1
+        elif dx >= MARGIN:
+            right += 1
+        if dy <= -MARGIN:
+            front += 1
+        elif dy >= MARGIN:
+            behind += 1
+
+    for direction, count in (("left", left), ("right", right), ("front", front), ("behind", behind)):
+        questions.append({
+            "image_file": image_file,
+            "question": f"How many karts are to the {direction} of the ego car? Answer with just the number.",
+            "answer": str(count),
+        })
+
+    return questions
+
+
+
 
 
 
@@ -308,56 +410,56 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
     #     q = f"Where is {k['kart_name']} relative to the ego car?"
     #     questions.append({"image_file": image_file, "question": q, "answer": rel})
 
-    MARGIN = 10  # pixels; must match counting logic below
+    # MARGIN = 10  # pixels; must match counting logic below
 
-    # ---- Q4: relative position per kart (vs ego) ----
-    for k in karts:
-        if k["instance_id"] == ego_kart["instance_id"]:
-            continue
+    # # ---- Q4: relative position per kart (vs ego) ----
+    # for k in karts:
+    #     if k["instance_id"] == ego_kart["instance_id"]:
+    #         continue
 
-        dx = k["center"][0] - ego_kart["center"][0]
-        dy = k["center"][1] - ego_kart["center"][1]
+    #     dx = k["center"][0] - ego_kart["center"][0]
+    #     dy = k["center"][1] - ego_kart["center"][1]
 
-        rel_parts = []
-        if dx <= -MARGIN:
-            rel_parts.append("left")
-        elif dx >= MARGIN:
-            rel_parts.append("right")
+    #     rel_parts = []
+    #     if dx <= -MARGIN:
+    #         rel_parts.append("left")
+    #     elif dx >= MARGIN:
+    #         rel_parts.append("right")
 
-        # y increases downward; negative dy means 'front'
-        if dy <= -MARGIN:
-            rel_parts.append("front")
-        elif dy >= MARGIN:
-            rel_parts.append("behind")
+    #     # y increases downward; negative dy means 'front'
+    #     if dy <= -MARGIN:
+    #         rel_parts.append("front")
+    #     elif dy >= MARGIN:
+    #         rel_parts.append("behind")
 
-        if not rel_parts:
-            # too close to call; skip noisy label
-            continue
+    #     if not rel_parts:
+    #         # too close to call; skip noisy label
+    #         continue
 
-        rel = " and ".join(rel_parts)
-        q = f"Where is {k['kart_name']} relative to the ego car?"
-        questions.append({"image_file": image_file, "question": q, "answer": rel})
+    #     rel = " and ".join(rel_parts)
+    #     q = f"Where is {k['kart_name']} relative to the ego car?"
+    #     questions.append({"image_file": image_file, "question": q, "answer": rel})
 
     # 5. Counting by position: one above is relative position, this is counting the position with the center kart
-    left = right = front = behind = 0
-    for k in karts:
-        if k["instance_id"] == ego_kart["instance_id"]:
-            continue
-        dx = k["center"][0] - ego_kart["center"][0]
-        dy = k["center"][1] - ego_kart["center"][1]
-        if dx < 0: left += 1 # try
-        if dx > 0: right += 1
-        if dy < 0: front += 1
-        if dy > 0: behind += 1
+    # left = right = front = behind = 0
+    # for k in karts:
+    #     if k["instance_id"] == ego_kart["instance_id"]:
+    #         continue
+    #     dx = k["center"][0] - ego_kart["center"][0]
+    #     dy = k["center"][1] - ego_kart["center"][1]
+    #     if dx < 0: left += 1 # try
+    #     if dx > 0: right += 1
+    #     if dy < 0: front += 1
+    #     if dy > 0: behind += 1
 
-    for direction, count in zip(["left", "right", "front", "behind"], [left, right, front, behind]):
-        questions.append({
-            "image_file": image_file,
-            "question": f"How many karts are to the {direction} of the ego car?",
-            "answer": str(count),
-        })
+    # for direction, count in zip(["left", "right", "front", "behind"], [left, right, front, behind]):
+    #     questions.append({
+    #         "image_file": image_file,
+    #         "question": f"How many karts are to the {direction} of the ego car?",
+    #         "answer": str(count),
+    #     })
 
-    return questions
+    # return questions
 
 
 def check_qa_pairs(info_file: str, view_index: int):
@@ -408,16 +510,26 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
     output_file = output_file or (split_dir / "all_qa_pairs.json")
 
     all_qa_pairs = []
-
     info_files = sorted(split_dir.glob("*_info.json"))
+
+    # for info_path in info_files:
+    #     for view_index in range(num_views):
+    #         qa_pairs = generate_qa_pairs(str(info_path), view_index)
+    #         if len(qa_pairs) == 0:
+    #             print(f"No QA pairs for {info_path.name}, view {view_index}")
+    #         else:
+    #             print(f"{len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
+    #         all_qa_pairs.extend(qa_pairs)
+
+    # with open(output_file, "w") as f:
+    #     json.dump(all_qa_pairs, f, indent=2)
+
+    # print(f"Saved {len(all_qa_pairs)} QA pairs to {output_file}")
     for info_path in info_files:
         for view_index in range(num_views):
-            qa_pairs = generate_qa_pairs(str(info_path), view_index)
-            if len(qa_pairs) == 0:
-                print(f"No QA pairs for {info_path.name}, view {view_index}")
-            else:
-                print(f"{len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
-            all_qa_pairs.extend(qa_pairs)
+            pairs = generate_qa_pairs(str(info_path), view_index)
+            if pairs:
+                all_qa_pairs.extend(pairs)
 
     with open(output_file, "w") as f:
         json.dump(all_qa_pairs, f, indent=2)
