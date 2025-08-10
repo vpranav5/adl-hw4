@@ -3,7 +3,7 @@ from pathlib import Path
 import fire
 from matplotlib import pyplot as plt
 
-from .generate_qa import draw_detections, extract_frame_info, extract_kart_objects, extract_track_info
+from .generate_qa import draw_detections, extract_frame_info, extract_kart_objects, extract_track_info, generate_qa_pairs
 
 import torch
 import torch.nn as nn
@@ -92,24 +92,24 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
         num_views: How many views to process per frame
     """
     split_dir = Path("data") / split
-    output_file = output_file or (split_dir / "all_qa_pairs.json")
+    output_file = output_file or (split_dir / "all_captions.json")  # ends with _captions.json
 
-    all_qa_pairs = []
+    all_caps = []
     info_files = sorted(split_dir.glob("*_info.json"))
 
     for info_path in info_files:
         for view_index in range(num_views):
-            qa_pairs = generate_qa_pairs(str(info_path), view_index)
-            if len(qa_pairs) == 0:
-                print(f"No QA pairs for {info_path.name}, view {view_index}")
-            else:
-                print(f"{len(qa_pairs)} pairs from {info_path.name}, view {view_index}")
-            all_qa_pairs.extend(qa_pairs)
+            caps = generate_caption(str(info_path), view_index)
+            if not caps:
+                continue
+            image_file = f"{split}/{info_path.stem.replace('_info', f'_{view_index:02d}_im.jpg')}"
+            for c in caps:
+                all_caps.append({"image_file": image_file, "caption": c})
 
     with open(output_file, "w") as f:
-        json.dump(all_qa_pairs, f, indent=2)
+        json.dump(all_caps, f, indent=2)
 
-    print(f"Saved {len(all_qa_pairs)} QA pairs to {output_file}")
+    print(f"Saved {len(all_caps)} captions to {output_file}")
 
 
 """
