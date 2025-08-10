@@ -186,7 +186,7 @@ def extract_kart_objects(
         kart_name  = names.get(str(track_label), f"kart_{track_label}")
         karts.append({
             "instance_id": int(track_id),
-            "kart_name": track_label,
+            "kart_name": kart_name,
             "center": center
         })
 
