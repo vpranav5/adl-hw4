@@ -42,15 +42,22 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
     caps = [
         f"The track is {track_name}.",
         f"There are {len(karts)} karts.",
-        f"The ego kart is {ego['kart_name']}."
+        f"The ego kart is {ego['kart_name']}." if ego['kart_name'] and not ego['kart_name'].startswith('kart_') else "The ego kart is present."
     ]
 
+    # def rel(dx, dy):
+    #     parts = []
+    #     if dx <= -MARGIN: parts.append("left")
+    #     elif dx >= MARGIN: parts.append("right")
+    #     if dy <= -MARGIN: parts.append("front")
+    #     elif dy >= MARGIN: parts.append("behind")
+    #     return " and ".join(parts)
     def rel(dx, dy):
+        horiz = "left" if dx <= -MARGIN else ("right" if dx >= MARGIN else None)
+        vert  = "front" if dy <= -MARGIN else ("back"  if dy >= MARGIN else None)
         parts = []
-        if dx <= -MARGIN: parts.append("left")
-        elif dx >= MARGIN: parts.append("right")
-        if dy <= -MARGIN: parts.append("front")
-        elif dy >= MARGIN: parts.append("behind")
+        if vert:  parts.append(vert)
+        if horiz: parts.append(horiz)
         return " and ".join(parts)
 
     for k in karts:
@@ -64,7 +71,7 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
 
     # Return multiple short captions so training doesn’t learn verbosity
     return caps
-    
+
     # captions = []
     # captions.append(f"There are {len(karts)} karts.")
     # captions.append(f"The ego kart is {ego_kart['kart_name']}.")
