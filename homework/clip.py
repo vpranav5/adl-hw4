@@ -49,16 +49,44 @@ def clip_data_collator(features: list[dict[str, torch.Tensor]]) -> dict[str, tor
     """
     Custom data collator for CLIP training.
     """
-    # Get max sequence length
+    # # Get max sequence length
+    # max_length = max(f["input_ids"].shape[0] for f in features)
+
+    # def pad_tensor(tensor, pad_value):
+    #     return torch.cat([tensor, torch.full((max_length - tensor.shape[0],), pad_value, dtype=tensor.dtype)])
+
+    # input_ids = torch.stack([pad_tensor(f["input_ids"], pad_value=processor.tokenizer.eos_token_id) for f in features])
+    # attention_mask = torch.stack([pad_tensor(f["attention_mask"], pad_value=0) for f in features])
+    # pixel_values = torch.stack([f["pixel_values"] for f in features])  # assume all are same shape
+    # labels = torch.stack([pad_tensor(f["labels"], pad_value=-100) for f in features])
+
+    # return {
+    #     "input_ids": input_ids.long(),
+    #     "attention_mask": attention_mask.long(),
+    #     "pixel_values": pixel_values.float(),
+    #     "labels": labels.long(),
+    # }
+    pad_id = processor.tokenizer.pad_token_id
+    if pad_id is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+        pad_id = processor.tokenizer.eos_token_id
+
+    # Get the longest sequence length in the batch
     max_length = max(f["input_ids"].shape[0] for f in features)
 
-    def pad_tensor(tensor, pad_value):
-        return torch.cat([tensor, torch.full((max_length - tensor.shape[0],), pad_value, dtype=tensor.dtype)])
+    def pad_tensor(tensor: torch.Tensor, pad_value: int):
+        length = tensor.shape[0]
+        if length < max_length:
+            pad_size = max_length - length
+            pad_tensor = torch.full((pad_size,), pad_value, dtype=tensor.dtype)
+            return torch.cat([tensor, pad_tensor], dim=0)
+        return tensor
 
-    input_ids = torch.stack([pad_tensor(f["input_ids"], pad_value=processor.tokenizer.eos_token_id) for f in features])
-    attention_mask = torch.stack([pad_tensor(f["attention_mask"], pad_value=0) for f in features])
-    pixel_values = torch.stack([f["pixel_values"] for f in features])  # assume all are same shape
-    labels = torch.stack([pad_tensor(f["labels"], pad_value=-100) for f in features])
+    # Pad and stack each field
+    input_ids = torch.stack([pad_tensor(f["input_ids"], pad_id) for f in features])
+    attention_mask = torch.stack([pad_tensor(f["attention_mask"], 0) for f in features])
+    pixel_values = torch.stack([f["pixel_values"] for f in features])
+    labels = torch.stack([pad_tensor(f["labels"], -100) for f in features])
 
     return {
         "input_ids": input_ids.long(),
@@ -84,19 +112,48 @@ class CaptionDatasetForTraining(Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    # def __getitem__(self, idx: int) -> dict[str, Any]:
+    #     item = self.dataset[idx]
+    #     image = Image.open(item["image_path"]).convert("RGB")
+    #     pixel_values = self.image_processor(image)
+    #     text = item["caption"] + self.processor.tokenizer.eos_token
+    #     text_inputs = self.processor(text=text, return_tensors="pt", padding=True, truncation=True)
+    #     input_ids = text_inputs["input_ids"].squeeze(0).long()
+    #     attention_mask = text_inputs["attention_mask"].squeeze(0)
+    #     return {
+    #         "pixel_values": pixel_values,
+    #         "input_ids": input_ids,
+    #         "attention_mask": attention_mask,
+    #         "labels": input_ids,  # placeholder to fit the collator
+    #     }
     def __getitem__(self, idx: int) -> dict[str, Any]:
         item = self.dataset[idx]
+
+        # Process image
         image = Image.open(item["image_path"]).convert("RGB")
         pixel_values = self.image_processor(image)
-        text = item["caption"] + self.processor.tokenizer.eos_token
-        text_inputs = self.processor(text=text, return_tensors="pt", padding=True, truncation=True)
-        input_ids = text_inputs["input_ids"].squeeze(0).long()
-        attention_mask = text_inputs["attention_mask"].squeeze(0)
+
+        # Use tokenizer directly (no processor chat/image template pollution)
+        tokenizer = self.processor.tokenizer
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        enc = tokenizer(
+            item["caption"],
+            return_tensors="pt",
+            padding=False,      # no extra padding here, collator will handle
+            truncation=True,
+            add_special_tokens=True
+        )
+
+        input_ids = enc["input_ids"].squeeze(0).long()
+        attention_mask = enc["attention_mask"].squeeze(0).long()
+
         return {
             "pixel_values": pixel_values,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": input_ids,  # placeholder to fit the collator
+            "labels": input_ids,  # placeholder for Trainer compatibility
         }
 
 
@@ -108,16 +165,13 @@ class CLIP(nn.Module):
         self.vision_encoder = vision_encoder
         self.text_encoder = text_encoder
         
-        self.proj_dim = proj_dim
-        self.temperature = nn.Parameter(torch.ones([]) * temperature)
-        
-        # Get the output dimensions from the encoders
-        vision_dim = self.vision_encoder.config.hidden_size
-        text_dim = self.text_encoder.config.hidden_size
-        
-        # Projection layers to map to common embedding space
-        self.vision_projection = nn.Linear(vision_dim, proj_dim, bias=False)
-        self.text_projection = nn.Linear(text_dim, proj_dim, bias=False)
+        # Projection layers
+        v_dim = vision_encoder.config.hidden_size
+        t_dim = text_encoder.config.hidden_size
+
+        self.image_proj = nn.Linear(v_dim, proj_dim, bias=False)
+        self.text_proj = nn.Linear(t_dim, proj_dim, bias=False)
+        self.logit_scale = nn.Parameter(torch.ones([]) * math.log(1 / temperature))
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
         return self.vision_encoder(image)
@@ -196,37 +250,20 @@ class CLIP(nn.Module):
             TODO: think about the what values should be returned
         """
        
-        # Get vision features
-        vision_outputs = self.vision_encoder(pixel_values)
-        # Use last_hidden_state and pool it (similar to text approach)
-        image_features = vision_outputs.last_hidden_state.mean(dim=1)
-        
-        # Get text features - use average pooling as mentioned in notes
-        text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
-        last_hidden_state = text_outputs.last_hidden_state
-        
-        if attention_mask is not None:
-            # Apply attention mask for proper average pooling
-            attention_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-            masked_embeddings = last_hidden_state * attention_mask_expanded
-            sum_embeddings = torch.sum(masked_embeddings, dim=1)
-            sum_mask = torch.clamp(attention_mask_expanded.sum(dim=1), min=1e-9)
-            text_features = sum_embeddings / sum_mask
-        else:
-            text_features = torch.mean(last_hidden_state, dim=1)
-        
-        # Project to common embedding space
-        image_embeds = self.vision_projection(image_features)
-        text_embeds = self.text_projection(text_features)
-        
-        # L2 normalize embeddings
-        image_embeds = F.normalize(image_embeds, p=2, dim=-1)
-        text_embeds = F.normalize(text_embeds, p=2, dim=-1)
-        
-        # Compute scaled cosine similarity matrix
-        logits = torch.matmul(image_embeds, text_embeds.t()) * torch.exp(self.temperature)
-        
-        return image_embeds, text_embeds, logits
+        v_out = self.vision_encoder(pixel_values=pixel_values, return_dict=True).last_hidden_state
+        v_pooled = v_out.mean(dim=1)  # average pooling
+        img_emb = F.normalize(self.image_proj(v_pooled), dim=-1)
+
+        # Encode text with attention mask pooling
+        t_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask, return_dict=True).last_hidden_state
+        t_pooled = (t_out * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(1, keepdim=True)
+        txt_emb = F.normalize(self.text_proj(t_pooled), dim=-1)
+
+        # Compute scaled similarity
+        scale = self.logit_scale.exp()
+        logits = scale * img_emb @ txt_emb.t()
+
+        return img_emb, txt_emb, logits
 
 def compute_clip_loss(
     outputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
@@ -244,25 +281,13 @@ def compute_clip_loss(
     Returns:
         The loss for the CLIP model.
     """
-    image_embeds, text_embeds, logits = outputs
-    
-    batch_size = logits.shape[0]
-    
-    # Create labels for contrastive learning
-    # In CLIP, the i-th image should match with the i-th text
-    target_labels = torch.arange(batch_size, device=logits.device, dtype=torch.long)
-    
-    # Compute symmetric loss as described in the paper
-    # Image-to-text loss (each image should match its corresponding text)
-    loss_i2t = F.cross_entropy(logits, target_labels)
-    
-    # Text-to-image loss (each text should match its corresponding image)  
-    loss_t2i = F.cross_entropy(logits.t(), target_labels)
-    
-    # Average the two losses
-    total_loss = (loss_i2t + loss_t2i) / 2.0
-    
-    return total_loss
+    _, _, logits = outputs
+    bsz = logits.size(0)
+    targets = torch.arange(bsz, device=logits.device)
+
+    loss_i2t = F.cross_entropy(logits, targets)
+    loss_t2i = F.cross_entropy(logits.t(), targets)
+    return (loss_i2t + loss_t2i) / 2
 
 def get_target_modules_for_lora(model: nn.Module) -> list[str]:
     target_modules = []
