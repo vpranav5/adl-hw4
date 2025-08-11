@@ -116,8 +116,9 @@ class CLIP(nn.Module):
 
         self.vision_proj = nn.Linear(vision_encoder.config.hidden_size, proj_dim, bias=False)
         self.text_proj = nn.Linear(text_encoder.config.hidden_size, proj_dim, bias=False)
-        # Initialize with log(1/temperature) for numerical stability
-        self.logit_scale = nn.Parameter(torch.ones([]) * math.log(1 / temperature))
+
+        # Log temperature (scalar) initialized to log(1/T)
+        self.logit_scale = nn.Parameter(torch.ones([]) * math.log(1.0 / temperature))
         
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
@@ -216,36 +217,69 @@ class CLIP(nn.Module):
 
         # return vision_emb, text_emb, logits_per_image
 
+        # proj_dtype = self.vision_proj.weight.dtype
+
+
+        # pixel_values = pixel_values.to(dtype=proj_dtype)
+        # v_out = self.vision_encoder(pixel_values)
+        # v_hidden = v_out.last_hidden_state if hasattr(v_out, "last_hidden_state") else v_out[0]
+        # v_feat = v_hidden.mean(dim=1)
+
+        # # Encode text
+        # t_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
+        # t_hidden = t_out.last_hidden_state if hasattr(t_out, "last_hidden_state") else t_out[0]
+
+        # # Masked mean pooling over tokens without upcasting
+        # if attention_mask is not None:
+        #     mask = attention_mask.unsqueeze(-1).to(dtype=t_hidden.dtype)
+        #     t_feat = (t_hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1e-6)
+        # else:
+        #     t_feat = t_hidden.mean(dim=1)
+
+        # # Match projection dtypes
+        # v_feat = v_feat.to(dtype=self.vision_proj.weight.dtype)
+        # t_feat = t_feat.to(dtype=self.text_proj.weight.dtype)
+
+        # # Project and normalize
+        # v_emb = F.normalize(self.vision_proj(v_feat), p=2, dim=-1)
+        # t_emb = F.normalize(self.text_proj(t_feat), p=2, dim=-1)
+
+        # # Similarity logits with dtype-aligned temperature
+        # logit_scale = self.logit_scale.exp().to(v_emb.dtype)
+        # logits_per_image = logit_scale * (v_emb @ t_emb.T)
+
+        # return v_emb, t_emb, logits_per_image
         proj_dtype = self.vision_proj.weight.dtype
 
-
+        # Encode image
         pixel_values = pixel_values.to(dtype=proj_dtype)
         v_out = self.vision_encoder(pixel_values)
         v_hidden = v_out.last_hidden_state if hasattr(v_out, "last_hidden_state") else v_out[0]
-        v_feat = v_hidden.mean(dim=1)
+        v_feat = v_hidden.mean(dim=1)  # [B_img, H]
 
         # Encode text
         t_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
-        t_hidden = t_out.last_hidden_state if hasattr(t_out, "last_hidden_state") else t_out[0]
+        t_hidden = t_out.last_hidden_state if hasattr(t_out, "last_hidden_state") else t_out[0]  # [B_txt, L, H]
 
-        # Masked mean pooling over tokens without upcasting
+        # Masked mean pooling over tokens (avoid fp32 upcast)
         if attention_mask is not None:
-            mask = attention_mask.unsqueeze(-1).to(dtype=t_hidden.dtype)
-            t_feat = (t_hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1e-6)
+            mask = attention_mask.unsqueeze(-1).to(dtype=t_hidden.dtype)  # [B_txt, L, 1]
+            t_feat = (t_hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1e-6)  # [B_txt, H]
         else:
             t_feat = t_hidden.mean(dim=1)
 
-        # Match projection dtypes
+        # Match projection input dtypes
         v_feat = v_feat.to(dtype=self.vision_proj.weight.dtype)
         t_feat = t_feat.to(dtype=self.text_proj.weight.dtype)
 
-        # Project and normalize
-        v_emb = F.normalize(self.vision_proj(v_feat), p=2, dim=-1)
-        t_emb = F.normalize(self.text_proj(t_feat), p=2, dim=-1)
+        # Project + L2 normalize
+        v_emb = F.normalize(self.vision_proj(v_feat), p=2, dim=-1)  # [B_img, D]
+        t_emb = F.normalize(self.text_proj(t_feat), p=2, dim=-1)    # [B_txt, D]
 
-        # Similarity logits with dtype-aligned temperature
+        # Similarities with dtype-aligned temperature
+        # (optionally clamp logit_scale to avoid extreme values)
         logit_scale = self.logit_scale.exp().to(v_emb.dtype)
-        logits_per_image = logit_scale * (v_emb @ t_emb.T)
+        logits_per_image = logit_scale * (v_emb @ t_emb.T)  # [B_img, B_txt]
 
         return v_emb, t_emb, logits_per_image
 
@@ -265,12 +299,21 @@ def compute_clip_loss(
     Returns:
         The loss for the CLIP model.
     """
-    vision_emb, text_emb, logits_per_image = outputs
-    logits_per_text = logits_per_image.T
-    targets = torch.arange(len(logits_per_image), device=logits_per_image.device)
-    loss_i = F.cross_entropy(logits_per_image, targets)
-    loss_t = F.cross_entropy(logits_per_text, targets)
-    return (loss_i + loss_t) / 2
+  
+    _, _, logits_per_image = outputs  # <-- you were missing this line
+    logits_i = logits_per_image.float()          # [N, N]
+    logits_t = logits_i.transpose(0, 1).contiguous()  # [N, N]
+
+    N = logits_i.size(0)
+    if N < 2:
+        # Cross-entropy with a single class is degenerate; avoid NaNs if batch==1
+        return torch.tensor(0.0, device=logits_i.device, dtype=logits_i.dtype)
+
+    targets = torch.arange(N, device=logits_i.device)
+
+    loss_i = F.cross_entropy(logits_i, targets)
+    loss_t = F.cross_entropy(logits_t, targets)
+    return 0.5 * (loss_i + loss_t)
 
 def get_target_modules_for_lora(model: nn.Module) -> list[str]:
     target_modules = []
@@ -382,12 +425,52 @@ def demo_train():
 
 
 def test(ckpt_path: str, val_dataset: str = "valid_grader"):
+    # import tqdm
+
+    # testset = MultiChoiceQADataset(val_dataset)
+
+    # # clip = load(ckpt_path)
+    # # clip = clip.model.to(device)
+    # clip = load(ckpt_path).to(device)  # keep adapters!
+    # clip.eval()
+
+    # image_processor = tv.transforms.Compose(
+    #     [
+    #         tv.transforms.Resize(192),
+    #         tv.transforms.CenterCrop(192),
+    #         tv.transforms.ToTensor(),
+    #         tv.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    #     ]
+    # )
+
+    # correct_count = 0
+    # total_count = 0
+
+    # for pair in tqdm.tqdm(testset):
+    #     image = Image.open(pair["image_path"]).convert("RGB")
+    #     pixel_values = image_processor(image).unsqueeze(0).to(device).bfloat16()
+    #     text_inputs = processor(
+    #         text=[s + processor.tokenizer.eos_token for s in pair["candidates"]],
+    #         return_tensors="pt",
+    #         padding=True,
+    #         truncation=True,
+    #     )
+    #     input_ids = text_inputs["input_ids"].long().to(device)
+    #     attention_mask = text_inputs["attention_mask"].to(device)
+    #     vision_feature, text_feature, _ = clip(pixel_values, input_ids, attention_mask)
+    #     prediction = torch.matmul(vision_feature, text_feature.T).argmax(dim=-1)
+    #     if prediction == pair["correct_index"]:
+    #         correct_count += 1
+    #     total_count += 1
+
+    # print(f"Accuracy: {correct_count / total_count}")
     import tqdm
 
     testset = MultiChoiceQADataset(val_dataset)
 
-    clip = load(ckpt_path)
-    clip = clip.model.to(device)
+    # Keep the PEFT wrapper (do NOT peel .model) and eval mode
+    clip = load(ckpt_path).to(device)
+    clip.eval()
 
     image_processor = tv.transforms.Compose(
         [
@@ -398,27 +481,35 @@ def test(ckpt_path: str, val_dataset: str = "valid_grader"):
         ]
     )
 
-    correct_count = 0
-    total_count = 0
+    correct = 0
+    total = 0
 
-    for pair in tqdm.tqdm(testset):
-        image = Image.open(pair["image_path"]).convert("RGB")
-        pixel_values = image_processor(image).unsqueeze(0).to(device).bfloat16()
-        text_inputs = processor(
-            text=[s + processor.tokenizer.eos_token for s in pair["candidates"]],
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-        )
-        input_ids = text_inputs["input_ids"].long().to(device)
-        attention_mask = text_inputs["attention_mask"].to(device)
-        vision_feature, text_feature, _ = clip(pixel_values, input_ids, attention_mask)
-        prediction = torch.matmul(vision_feature, text_feature.T).argmax(dim=-1)
-        if prediction == pair["correct_index"]:
-            correct_count += 1
-        total_count += 1
+    with torch.no_grad():
+        for pair in tqdm.tqdm(testset):
+            image = Image.open(pair["image_path"]).convert("RGB")
+            pixel_values = image_processor(image).unsqueeze(0).to(device)
+            if device == "cuda":
+                pixel_values = pixel_values.to(dtype=torch.bfloat16)
 
-    print(f"Accuracy: {correct_count / total_count}")
+            # Tokenize all candidates together
+            text_inputs = processor(
+                text=[c + processor.tokenizer.eos_token for c in pair["candidates"]],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+            )
+            input_ids = text_inputs["input_ids"].long().to(device)
+            attention_mask = text_inputs["attention_mask"].to(device)
+
+            # Use model's logits directly (image x text)
+            _, _, logits = clip(pixel_values, input_ids, attention_mask)  # [1, num_candidates]
+            pred = logits.argmax(dim=-1).item()
+
+            if pred == int(pair["correct_index"]):
+                correct += 1
+            total += 1
+
+    print(f"Accuracy: {correct / total:.4f}")
 
 
 def main():
