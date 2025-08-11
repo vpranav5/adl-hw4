@@ -109,9 +109,15 @@ class CLIP(nn.Module):
         self.vision_encoder = vision_encoder
         self.text_encoder = text_encoder
         
+        # self.vision_proj = nn.Linear(vision_encoder.config.hidden_size, proj_dim, bias=False)
+        # self.text_proj = nn.Linear(text_encoder.config.hidden_size, proj_dim, bias=False)
+        # self.logit_scale = nn.Parameter(torch.tensor(math.log(1 / temperature)))
+
+
         self.vision_proj = nn.Linear(vision_encoder.config.hidden_size, proj_dim, bias=False)
         self.text_proj = nn.Linear(text_encoder.config.hidden_size, proj_dim, bias=False)
-        self.logit_scale = nn.Parameter(torch.tensor(math.log(1 / temperature)))
+        # Initialize with log(1/temperature) for numerical stability
+        self.logit_scale = nn.Parameter(torch.ones([]) * math.log(1 / temperature))
         
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
@@ -191,23 +197,66 @@ class CLIP(nn.Module):
             TODO: think about the what values should be returned
         """
        
-        vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
-        vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+        # vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
+        # vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+        # vision_emb = self.vision_proj(vision_feat)
+
+        # text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        # eos_token_id = processor.tokenizer.eos_token_id
+        # eos_mask = (input_ids == eos_token_id).int()
+        # eos_pos = eos_mask.argmax(dim=1)
+        # text_feat = text_outputs[torch.arange(input_ids.shape[0]), eos_pos, :]
+        # text_emb = self.text_proj(text_feat)
+
+        # vision_emb = F.normalize(vision_emb, dim=-1)
+        # text_emb = F.normalize(text_emb, dim=-1)
+
+        # logit_scale = self.logit_scale.exp()
+        # logits_per_image = logit_scale * vision_emb @ text_emb.T
+
+        # return vision_emb, text_emb, logits_per_image
+
+        vision_outputs = self.vision_encoder(pixel_values)
+        vision_hidden = vision_outputs.last_hidden_state
+        # Average pool over spatial dimensions (sequence length)
+        vision_feat = vision_hidden.mean(dim=1)
+        
+        # Encode text
+        text_outputs = self.text_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+        text_hidden = text_outputs.last_hidden_state
+        
+        # CRITICAL FIX: Use average pooling with attention mask instead of EOS token
+        if attention_mask is not None:
+            # Expand mask to match hidden state dimensions
+            mask_expanded = attention_mask.unsqueeze(-1).expand(text_hidden.size()).float()
+            
+            # Sum embeddings where mask is 1 (real tokens)
+            sum_embeddings = torch.sum(text_hidden * mask_expanded, dim=1)
+            
+            # Count number of real tokens per sequence
+            sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+            
+            # Compute average (excluding padding)
+            text_feat = sum_embeddings / sum_mask
+        else:
+            # If no attention mask, just use mean pooling
+            text_feat = text_hidden.mean(dim=1)
+        
+        # Project to common embedding space
         vision_emb = self.vision_proj(vision_feat)
-
-        text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        eos_token_id = processor.tokenizer.eos_token_id
-        eos_mask = (input_ids == eos_token_id).int()
-        eos_pos = eos_mask.argmax(dim=1)
-        text_feat = text_outputs[torch.arange(input_ids.shape[0]), eos_pos, :]
         text_emb = self.text_proj(text_feat)
-
-        vision_emb = F.normalize(vision_emb, dim=-1)
-        text_emb = F.normalize(text_emb, dim=-1)
-
+        
+        # L2 normalize embeddings
+        vision_emb = F.normalize(vision_emb, p=2, dim=-1)
+        text_emb = F.normalize(text_emb, p=2, dim=-1)
+        
+        # Compute cosine similarity scaled by temperature
         logit_scale = self.logit_scale.exp()
-        logits_per_image = logit_scale * vision_emb @ text_emb.T
-
+        logits_per_image = logit_scale * (vision_emb @ text_emb.t())
+        
         return vision_emb, text_emb, logits_per_image
 
 def compute_clip_loss(
