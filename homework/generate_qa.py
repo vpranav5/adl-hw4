@@ -793,11 +793,6 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
             print(f"  {q_type}: {count}")
 
 
-# Add generate_all function as mentioned in tips
-def generate_all():
-    """Generate QA pairs for train split with default parameters"""
-    generate(split="train", output_file=None, num_views=5)
-    
 # def generate(split: str = "train", output_file: str = None, num_views: int = 5):
 #     """
 #     Generate and save QA pairs for all files in a dataset split.
