@@ -207,17 +207,55 @@ class CLIP(nn.Module):
 
         # return vision_emb, text_emb, logits_per_image
         # Vision encoding
+        # vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
+        # vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+        # vision_emb = self.vision_proj(vision_feat)
+
+        # # Text encoding with proper attention mask usage
+        # text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        
+        # # Use attention mask to get proper text representation (average pooling over valid tokens)
+        # if attention_mask is not None:
+        #     # Expand attention mask to match hidden size
+        #     attention_mask_expanded = attention_mask.unsqueeze(-1).expand(text_outputs.size()).float()
+        #     # Apply mask and average over valid tokens
+        #     sum_embeddings = torch.sum(text_outputs * attention_mask_expanded, dim=1)
+        #     sum_mask = torch.clamp(attention_mask_expanded.sum(dim=1), min=1e-9)
+        #     text_feat = sum_embeddings / sum_mask
+        # else:
+        #     # Fallback to simple average if no attention mask
+        #     text_feat = text_outputs.mean(dim=1)
+        
+        # text_emb = self.text_proj(text_feat)
+
+        # # Normalize embeddings
+        # vision_emb = F.normalize(vision_emb, dim=-1)
+        # text_emb = F.normalize(text_emb, dim=-1)
+
+        # # Compute logits
+        # logit_scale = self.logit_scale.exp()
+        # logits_per_image = logit_scale * vision_emb @ text_emb.T
+
+        # return vision_emb, text_emb, logits_per_image
+
         vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
         vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+
+        # Ensure vision_feat has the correct dtype for projection layer
+        if hasattr(self.vision_proj, 'weight') and self.vision_proj.weight.dtype != vision_feat.dtype:
+            vision_feat = vision_feat.to(self.vision_proj.weight.dtype)
+
         vision_emb = self.vision_proj(vision_feat)
 
         # Text encoding with proper attention mask usage
         text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        
+
         # Use attention mask to get proper text representation (average pooling over valid tokens)
         if attention_mask is not None:
-            # Expand attention mask to match hidden size
-            attention_mask_expanded = attention_mask.unsqueeze(-1).expand(text_outputs.size()).float()
+            # Expand attention mask to match hidden size and ensure correct dtype
+            attention_mask_expanded = attention_mask.unsqueeze(-1).expand(text_outputs.size())
+            attention_mask_expanded = attention_mask_expanded.to(text_outputs.dtype)
+
             # Apply mask and average over valid tokens
             sum_embeddings = torch.sum(text_outputs * attention_mask_expanded, dim=1)
             sum_mask = torch.clamp(attention_mask_expanded.sum(dim=1), min=1e-9)
@@ -225,7 +263,11 @@ class CLIP(nn.Module):
         else:
             # Fallback to simple average if no attention mask
             text_feat = text_outputs.mean(dim=1)
-        
+
+        # Ensure text_feat has the correct dtype for projection layer
+        if hasattr(self.text_proj, 'weight') and self.text_proj.weight.dtype != text_feat.dtype:
+            text_feat = text_feat.to(self.text_proj.weight.dtype)
+
         text_emb = self.text_proj(text_feat)
 
         # Normalize embeddings
