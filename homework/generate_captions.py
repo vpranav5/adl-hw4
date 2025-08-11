@@ -12,22 +12,57 @@ import math
 import json
 
 
+# def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100) -> list:
+#     """
+#     Generate caption for a specific view.
+#     """
+#     # 1. Ego car
+#     # {kart_name} is the ego car.
+
+#     # 2. Counting
+#     # There are {num_karts} karts in the scenario.
+
+#     # 3. Track name
+#     # The track is {track_name}.
+
+#     # 4. Relative position
+#     # {kart_name} is {position} of the ego car.
+
+#     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
+#     track_name = extract_track_info(info_path)
+#     ego = next((k for k in karts if k.get("is_center_kart") or k["instance_id"] == 0), None)
+#     if ego is None:
+#         return []
+
+#     MARGIN = 6
+#     caps = [f"The track is {track_name}.",
+#             f"There are {len(karts)} karts."]
+#     if not ego["kart_name"].startswith("kart_"):
+#         caps.append(f"The ego kart is {ego['kart_name']}.")
+
+#     def rel(dx, dy):
+#         parts = []
+#         if dy <= -MARGIN: parts.append("front")
+#         elif dy >= MARGIN: parts.append("back")
+#         if dx <= -MARGIN: parts.append("left")
+#         elif dx >= MARGIN: parts.append("right")
+#         return " and ".join(parts)
+
+#     for k in karts:
+#         if k["instance_id"] == ego["instance_id"]:
+#             continue
+#         dx = k["center"][0] - ego["center"][0]
+#         dy = k["center"][1] - ego["center"][1]
+#         r = rel(dx, dy)
+#         if r:
+#             caps.append(f"{k['kart_name']} is {r} of the ego car.")
+
+#     return caps
+
 def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100) -> list:
     """
     Generate caption for a specific view.
     """
-    # 1. Ego car
-    # {kart_name} is the ego car.
-
-    # 2. Counting
-    # There are {num_karts} karts in the scenario.
-
-    # 3. Track name
-    # The track is {track_name}.
-
-    # 4. Relative position
-    # {kart_name} is {position} of the ego car.
-
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
     ego = next((k for k in karts if k.get("is_center_kart") or k["instance_id"] == 0), None)

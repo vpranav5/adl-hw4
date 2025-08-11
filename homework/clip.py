@@ -33,7 +33,7 @@ def load(model_name: str = "clip_model"):
     vlm = BaseVLM()
     vision_encoder = vlm.model.model.vision_model
     text_encoder = vlm.model.model.text_model
-    
+
     clip = CLIP(vision_encoder, text_encoder)
     clip = PeftModel.from_pretrained(clip, model_path).to(device)
 
@@ -188,20 +188,51 @@ class CLIP(nn.Module):
         Returns:
             TODO: think about the what values should be returned
         """
+        # vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
+        # vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+        # vision_emb = self.vision_proj(vision_feat)
+
+        # text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        # eos_token_id = processor.tokenizer.eos_token_id
+        # eos_mask = (input_ids == eos_token_id).int()
+        # eos_pos = eos_mask.argmax(dim=1)
+        # text_feat = text_outputs[torch.arange(input_ids.shape[0]), eos_pos, :]
+        # text_emb = self.text_proj(text_feat)
+
+        # vision_emb = F.normalize(vision_emb, dim=-1)
+        # text_emb = F.normalize(text_emb, dim=-1)
+
+        # logit_scale = self.logit_scale.exp()
+        # logits_per_image = logit_scale * vision_emb @ text_emb.T
+
+        # return vision_emb, text_emb, logits_per_image
+        # Vision encoding
         vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
         vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
         vision_emb = self.vision_proj(vision_feat)
 
+        # Text encoding with proper attention mask usage
         text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        eos_token_id = processor.tokenizer.eos_token_id
-        eos_mask = (input_ids == eos_token_id).int()
-        eos_pos = eos_mask.argmax(dim=1)
-        text_feat = text_outputs[torch.arange(input_ids.shape[0]), eos_pos, :]
+        
+        # Use attention mask to get proper text representation (average pooling over valid tokens)
+        if attention_mask is not None:
+            # Expand attention mask to match hidden size
+            attention_mask_expanded = attention_mask.unsqueeze(-1).expand(text_outputs.size()).float()
+            # Apply mask and average over valid tokens
+            sum_embeddings = torch.sum(text_outputs * attention_mask_expanded, dim=1)
+            sum_mask = torch.clamp(attention_mask_expanded.sum(dim=1), min=1e-9)
+            text_feat = sum_embeddings / sum_mask
+        else:
+            # Fallback to simple average if no attention mask
+            text_feat = text_outputs.mean(dim=1)
+        
         text_emb = self.text_proj(text_feat)
 
+        # Normalize embeddings
         vision_emb = F.normalize(vision_emb, dim=-1)
         text_emb = F.normalize(text_emb, dim=-1)
 
+        # Compute logits
         logit_scale = self.logit_scale.exp()
         logits_per_image = logit_scale * vision_emb @ text_emb.T
 
@@ -224,12 +255,27 @@ def compute_clip_loss(
     Returns:
         The loss for the CLIP model.
     """
+    # vision_emb, text_emb, logits_per_image = outputs
+    # logits_per_text = logits_per_image.T
+    # targets = torch.arange(len(logits_per_image), device=logits_per_image.device)
+    # loss_i = F.cross_entropy(logits_per_image, targets)
+    # loss_t = F.cross_entropy(logits_per_text, targets)
+    # return (loss_i + loss_t) / 2
     vision_emb, text_emb, logits_per_image = outputs
     logits_per_text = logits_per_image.T
-    targets = torch.arange(len(logits_per_image), device=logits_per_image.device)
-    loss_i = F.cross_entropy(logits_per_image, targets)
-    loss_t = F.cross_entropy(logits_per_text, targets)
-    return (loss_i + loss_t) / 2
+    
+    # Create diagonal targets (each image should match with its corresponding text)
+    batch_size = logits_per_image.size(0)
+    targets = torch.arange(batch_size, device=logits_per_image.device, dtype=torch.long)
+    
+    # Symmetric loss: image-to-text and text-to-image
+    loss_i2t = F.cross_entropy(logits_per_image, targets)
+    loss_t2i = F.cross_entropy(logits_per_text, targets)
+    
+    # Average the two losses
+    loss = (loss_i2t + loss_t2i) / 2.0
+    
+    return loss
 
 
 def get_target_modules_for_lora(model: nn.Module) -> list[str]:
