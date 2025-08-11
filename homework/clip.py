@@ -49,44 +49,16 @@ def clip_data_collator(features: list[dict[str, torch.Tensor]]) -> dict[str, tor
     """
     Custom data collator for CLIP training.
     """
-    # # Get max sequence length
-    # max_length = max(f["input_ids"].shape[0] for f in features)
-
-    # def pad_tensor(tensor, pad_value):
-    #     return torch.cat([tensor, torch.full((max_length - tensor.shape[0],), pad_value, dtype=tensor.dtype)])
-
-    # input_ids = torch.stack([pad_tensor(f["input_ids"], pad_value=processor.tokenizer.eos_token_id) for f in features])
-    # attention_mask = torch.stack([pad_tensor(f["attention_mask"], pad_value=0) for f in features])
-    # pixel_values = torch.stack([f["pixel_values"] for f in features])  # assume all are same shape
-    # labels = torch.stack([pad_tensor(f["labels"], pad_value=-100) for f in features])
-
-    # return {
-    #     "input_ids": input_ids.long(),
-    #     "attention_mask": attention_mask.long(),
-    #     "pixel_values": pixel_values.float(),
-    #     "labels": labels.long(),
-    # }
-    pad_id = processor.tokenizer.pad_token_id
-    if pad_id is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-        pad_id = processor.tokenizer.eos_token_id
-
-    # Get the longest sequence length in the batch
+    # Get max sequence length
     max_length = max(f["input_ids"].shape[0] for f in features)
 
-    def pad_tensor(tensor: torch.Tensor, pad_value: int):
-        length = tensor.shape[0]
-        if length < max_length:
-            pad_size = max_length - length
-            pad_tensor = torch.full((pad_size,), pad_value, dtype=tensor.dtype)
-            return torch.cat([tensor, pad_tensor], dim=0)
-        return tensor
+    def pad_tensor(tensor, pad_value):
+        return torch.cat([tensor, torch.full((max_length - tensor.shape[0],), pad_value, dtype=tensor.dtype)])
 
-    # Pad and stack each field
-    input_ids = torch.stack([pad_tensor(f["input_ids"], pad_id) for f in features])
-    attention_mask = torch.stack([pad_tensor(f["attention_mask"], 0) for f in features])
-    pixel_values = torch.stack([f["pixel_values"] for f in features])
-    labels = torch.stack([pad_tensor(f["labels"], -100) for f in features])
+    input_ids = torch.stack([pad_tensor(f["input_ids"], pad_value=processor.tokenizer.eos_token_id) for f in features])
+    attention_mask = torch.stack([pad_tensor(f["attention_mask"], pad_value=0) for f in features])
+    pixel_values = torch.stack([f["pixel_values"] for f in features])  # assume all are same shape
+    labels = torch.stack([pad_tensor(f["labels"], pad_value=-100) for f in features])
 
     return {
         "input_ids": input_ids.long(),
@@ -112,48 +84,20 @@ class CaptionDatasetForTraining(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    # def __getitem__(self, idx: int) -> dict[str, Any]:
-    #     item = self.dataset[idx]
-    #     image = Image.open(item["image_path"]).convert("RGB")
-    #     pixel_values = self.image_processor(image)
-    #     text = item["caption"] + self.processor.tokenizer.eos_token
-    #     text_inputs = self.processor(text=text, return_tensors="pt", padding=True, truncation=True)
-    #     input_ids = text_inputs["input_ids"].squeeze(0).long()
-    #     attention_mask = text_inputs["attention_mask"].squeeze(0)
-    #     return {
-    #         "pixel_values": pixel_values,
-    #         "input_ids": input_ids,
-    #         "attention_mask": attention_mask,
-    #         "labels": input_ids,  # placeholder to fit the collator
-    #     }
+    
     def __getitem__(self, idx: int) -> dict[str, Any]:
         item = self.dataset[idx]
-
-        # Process image
         image = Image.open(item["image_path"]).convert("RGB")
         pixel_values = self.image_processor(image)
-
-        # Use tokenizer directly (no processor chat/image template pollution)
-        tokenizer = self.processor.tokenizer
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        enc = tokenizer(
-            item["caption"],
-            return_tensors="pt",
-            padding=False,      # no extra padding here, collator will handle
-            truncation=True,
-            add_special_tokens=True
-        )
-
-        input_ids = enc["input_ids"].squeeze(0).long()
-        attention_mask = enc["attention_mask"].squeeze(0).long()
-
+        text = item["caption"] + self.processor.tokenizer.eos_token
+        text_inputs = self.processor(text=text, return_tensors="pt", padding=True, truncation=True)
+        input_ids = text_inputs["input_ids"].squeeze(0).long()
+        attention_mask = text_inputs["attention_mask"].squeeze(0)
         return {
             "pixel_values": pixel_values,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": input_ids,  # placeholder for Trainer compatibility
+            "labels": input_ids,  # placeholder to fit the collator
         }
 
 
