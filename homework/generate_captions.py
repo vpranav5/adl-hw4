@@ -13,23 +13,18 @@ import json
 
 
 def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100):
-    """
-    Generate simple captions for a given SuperTuxKart view.
-    Includes track name, kart count, and relative positions.
-    """
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
 
-    ego = next((k for k in karts if k.get("is_center_kart") or k["instance_id"] == 0), None)
-    if ego is None:
-        return []
-
-    MARGIN = 6
     captions = [
         f"The track is {track_name}.",
         f"There are {len(karts)} karts."
     ]
 
+    # Try to find ego kart, but still proceed if not found
+    ego = next((k for k in karts if k.get("is_center_kart") or k["instance_id"] == 0), None)
+
+    MARGIN = 6
     def rel(dx, dy):
         parts = []
         if dy <= -MARGIN: parts.append("front")
@@ -38,12 +33,17 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
         elif dx >= MARGIN: parts.append("right")
         return " and ".join(parts)
 
-    for k in karts:
-        if k["instance_id"] == ego["instance_id"]:
-            continue
-        r = rel(k["center"][0] - ego["center"][0], k["center"][1] - ego["center"][1])
-        if r:
-            captions.append(f"{k['kart_name']} is {r} of the ego car.")
+    if ego:
+        for k in karts:
+            if k["instance_id"] == ego["instance_id"]:
+                continue
+            r = rel(k["center"][0] - ego["center"][0], k["center"][1] - ego["center"][1])
+            if r:
+                captions.append(f"{k['kart_name']} is {r} of the ego car.")
+    else:
+        # Describe visible karts without ego reference
+        for k in karts:
+            captions.append(f"A {k['kart_name']} is visible on the track.")
 
     return captions
 
@@ -67,18 +67,19 @@ def check_caption(info_file: str, view_index: int):
     plt.axis("off")
     plt.title(f"Frame {extract_frame_info(str(image_file))[0]}, View {view_index}")
     plt.show()
-    
-def generate(split: str = "train", output_file: str = None, num_views: int = 5):
-    """
-    Generate caption dataset for CLIP training.
-    Saves a JSON list of {"image_file", "caption"} objects.
-    """
+
+def generate(split: str = "train", output_file: str = None, num_views: int = None):
     split_dir = Path("data") / split
     output_file = output_file or (split_dir / "all_captions.json")
     all_caps = []
 
     for info_path in sorted(split_dir.glob("*_info.json")):
-        for view_index in range(num_views):
+        with open(info_path) as f:
+            data = json.load(f)
+        max_views = len(data.get("views", []))
+        views_to_use = num_views if num_views else max_views
+
+        for view_index in range(views_to_use):
             caps = generate_caption(str(info_path), view_index)
             if not caps:
                 continue

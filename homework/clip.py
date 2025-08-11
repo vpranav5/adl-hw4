@@ -195,15 +195,16 @@ class CLIP(nn.Module):
         """
        
         v_out = self.vision_encoder(pixel_values=pixel_values, return_dict=True).last_hidden_state
-        v_pooled = v_out.mean(dim=1)  # average pooling
+        v_pooled = v_out.mean(dim=1)  # Average pooling over spatial tokens
         img_emb = F.normalize(self.image_proj(v_pooled), dim=-1)
 
-        # Encode text with attention mask pooling
+        # ---- Text Encoding ----
         t_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask, return_dict=True).last_hidden_state
-        t_pooled = (t_out * attention_mask.unsqueeze(-1)).sum(1) / attention_mask.sum(1, keepdim=True)
+        mask = attention_mask.unsqueeze(-1).float()  # ensure float for multiplication
+        t_pooled = (t_out * mask).sum(1) / mask.sum(1, keepdim=True)  # masked average pooling
         txt_emb = F.normalize(self.text_proj(t_pooled), dim=-1)
 
-        # Compute scaled similarity
+        # ---- Similarity & Logits ----
         scale = self.logit_scale.exp()
         logits = scale * img_emb @ txt_emb.t()
 
