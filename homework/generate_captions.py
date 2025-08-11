@@ -126,7 +126,7 @@ def generate(split: str = "train", output_file: str = None, num_views: int = Non
                         continue  # Skip if image doesn't exist
                     
                     # Generate captions for this view
-                    captions = generate_captions(str(info_path), view_index)
+                    captions = generate_caption(str(info_path), view_index)
                     
                     if not captions or len(captions) <= 1:  # Skip if only track/count captions (no ego)
                         skipped_no_ego += 1
