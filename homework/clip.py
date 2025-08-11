@@ -216,48 +216,38 @@ class CLIP(nn.Module):
 
         # return vision_emb, text_emb, logits_per_image
 
-        vision_outputs = self.vision_encoder(pixel_values)
-        vision_hidden = vision_outputs.last_hidden_state
-        # Average pool over spatial dimensions (sequence length)
-        vision_feat = vision_hidden.mean(dim=1)
-        
+        proj_dtype = self.vision_proj.weight.dtype
+
+
+        pixel_values = pixel_values.to(dtype=proj_dtype)
+        v_out = self.vision_encoder(pixel_values)
+        v_hidden = v_out.last_hidden_state if hasattr(v_out, "last_hidden_state") else v_out[0]
+        v_feat = v_hidden.mean(dim=1)
+
         # Encode text
-        text_outputs = self.text_encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        text_hidden = text_outputs.last_hidden_state
-        
-        # CRITICAL FIX: Use average pooling with attention mask instead of EOS token
+        t_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
+        t_hidden = t_out.last_hidden_state if hasattr(t_out, "last_hidden_state") else t_out[0]
+
+        # Masked mean pooling over tokens without upcasting
         if attention_mask is not None:
-            # Expand mask to match hidden state dimensions
-            mask_expanded = attention_mask.unsqueeze(-1).expand(text_hidden.size()).float()
-            
-            # Sum embeddings where mask is 1 (real tokens)
-            sum_embeddings = torch.sum(text_hidden * mask_expanded, dim=1)
-            
-            # Count number of real tokens per sequence
-            sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
-            
-            # Compute average (excluding padding)
-            text_feat = sum_embeddings / sum_mask
+            mask = attention_mask.unsqueeze(-1).to(dtype=t_hidden.dtype)
+            t_feat = (t_hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1e-6)
         else:
-            # If no attention mask, just use mean pooling
-            text_feat = text_hidden.mean(dim=1)
-        
-        # Project to common embedding space
-        vision_emb = self.vision_proj(vision_feat)
-        text_emb = self.text_proj(text_feat)
-        
-        # L2 normalize embeddings
-        vision_emb = F.normalize(vision_emb, p=2, dim=-1)
-        text_emb = F.normalize(text_emb, p=2, dim=-1)
-        
-        # Compute cosine similarity scaled by temperature
-        logit_scale = self.logit_scale.exp()
-        logits_per_image = logit_scale * (vision_emb @ text_emb.t())
-        
-        return vision_emb, text_emb, logits_per_image
+            t_feat = t_hidden.mean(dim=1)
+
+        # Match projection dtypes
+        v_feat = v_feat.to(dtype=self.vision_proj.weight.dtype)
+        t_feat = t_feat.to(dtype=self.text_proj.weight.dtype)
+
+        # Project and normalize
+        v_emb = F.normalize(self.vision_proj(v_feat), p=2, dim=-1)
+        t_emb = F.normalize(self.text_proj(t_feat), p=2, dim=-1)
+
+        # Similarity logits with dtype-aligned temperature
+        logit_scale = self.logit_scale.exp().to(v_emb.dtype)
+        logits_per_image = logit_scale * (v_emb @ t_emb.T)
+
+        return v_emb, t_emb, logits_per_image
 
 def compute_clip_loss(
     outputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
