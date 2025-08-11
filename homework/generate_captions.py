@@ -107,28 +107,11 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
     MARGIN = 6
     caps = []
     
-    # Basic scene descriptions
+    # Core scene descriptions (4-5 captions)
     caps.append(f"The track is {track_name}.")
-    caps.append(f"There are {len(karts)} karts in the scene.")
-    caps.append(f"A racing scene on {track_name}.")
-    caps.append(f"Kart racing taking place on {track_name}.")
-    
-    # More varied counting and scene descriptions
-    if len(karts) > 1:
-        caps.append(f"A total of {len(karts)} karts are visible.")
-        caps.append(f"The scene shows {len(karts)} racing karts.")
-        caps.append(f"{len(karts)} karts racing on {track_name}.")
-        
-    if len(karts) > 2:
-        caps.append("Multiple karts are positioned around the track.")
-        caps.append("Several racing karts are visible in this view.")
-        caps.append("Multiple karts competing in the race.")
-    
-    # Ego kart descriptions
+    caps.append(f"There are {len(karts)} karts.")
     if not ego["kart_name"].startswith("kart_"):
         caps.append(f"The ego kart is {ego['kart_name']}.")
-        caps.append(f"{ego['kart_name']} is the main kart in view.")
-        caps.append(f"{ego['kart_name']} racing on {track_name}.")
 
     def rel(dx, dy):
         parts = []
@@ -138,7 +121,7 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
         elif dx >= MARGIN: parts.append("right")
         return " and ".join(parts)
 
-    # Positional descriptions for other karts
+    # Positional descriptions (limited to avoid explosion)
     for k in karts:
         if k["instance_id"] == ego["instance_id"]:
             continue
@@ -147,14 +130,6 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
         r = rel(dx, dy)
         if r:
             caps.append(f"{k['kart_name']} is {r} of the ego car.")
-            caps.append(f"{k['kart_name']} can be seen {r} of the main kart.")
-            caps.append(f"{k['kart_name']} positioned {r} relative to ego kart.")
-            
-    # Additional varied scene descriptions
-    caps.append(f"Racing action on {track_name} with karts.")
-    caps.append(f"Kart racing competition on {track_name}.")
-    caps.append("Racing karts on the track.")
-    caps.append("Karts competing in a race.")
     
     return caps
 
@@ -226,10 +201,10 @@ def generate(split: str = "train", output_file: str = None, num_views: int = 5):
     info_files = sorted(split_dir.glob("*_info.json"))
     
     print(f"Processing {len(info_files)} info files with {num_views} views each...")
-    print(f"Target: Generate around 200k captions")
+    print(f"Target: Generate around 200k captions (about 5-6 captions per image)")
 
     for i, info_path in enumerate(info_files):
-        if i % 100 == 0:  # Progress indicator every 100 files
+        if i % 500 == 0:  # Less frequent progress updates
             print(f"Processed {i}/{len(info_files)} files, generated {len(all_caps)} captions so far")
             
         for view_index in range(num_views):

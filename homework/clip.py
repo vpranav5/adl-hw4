@@ -107,7 +107,7 @@ class CLIP(nn.Module):
         super().__init__()
         self.vision_encoder = vision_encoder
         self.text_encoder = text_encoder
-        # TODO: implement the rest components
+        
         self.proj_dim = proj_dim
         self.temperature = nn.Parameter(torch.ones([]) * temperature)
         
@@ -196,13 +196,15 @@ class CLIP(nn.Module):
             TODO: think about the what values should be returned
         """
        
+        # Get vision features
         vision_outputs = self.vision_encoder(pixel_values)
-        image_features = vision_outputs.pooler_output
-
+        # Use last_hidden_state and pool it (similar to text approach)
+        image_features = vision_outputs.last_hidden_state.mean(dim=1)
+        
         # Get text features - use average pooling as mentioned in notes
         text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
         last_hidden_state = text_outputs.last_hidden_state
-
+        
         if attention_mask is not None:
             # Apply attention mask for proper average pooling
             attention_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
@@ -212,20 +214,19 @@ class CLIP(nn.Module):
             text_features = sum_embeddings / sum_mask
         else:
             text_features = torch.mean(last_hidden_state, dim=1)
-
+        
         # Project to common embedding space
         image_embeds = self.vision_projection(image_features)
         text_embeds = self.text_projection(text_features)
-
+        
         # L2 normalize embeddings
         image_embeds = F.normalize(image_embeds, p=2, dim=-1)
         text_embeds = F.normalize(text_embeds, p=2, dim=-1)
-
+        
         # Compute scaled cosine similarity matrix
         logits = torch.matmul(image_embeds, text_embeds.t()) * torch.exp(self.temperature)
-
+        
         return image_embeds, text_embeds, logits
-
 
 def compute_clip_loss(
     outputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
