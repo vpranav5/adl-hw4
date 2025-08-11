@@ -375,7 +375,7 @@ def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img
             "answer": str(count),
         })
 
-#     return qs
+    return qs
 # def generate_qa_pairs(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100) -> list:
 #     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
 #     track_name = extract_track_info(info_path)
