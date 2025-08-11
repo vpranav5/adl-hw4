@@ -15,26 +15,26 @@ import json
 def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100):
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
-    
+
     captions = []
-    
+
     # Find ego kart (center kart or instance_id 0)
     ego = None
     for k in karts:
         if k.get("is_center_kart") or k["instance_id"] == 0:
             ego = k
             break
-    
+
     # 1. Ego car caption
     if ego:
         captions.append(f"{ego['kart_name']} is the ego car.")
-    
+
     # 2. Counting caption
     captions.append(f"There are {len(karts)} karts in the scenario.")
-    
+
     # 3. Track name caption
     captions.append(f"The track is {track_name}.")
-    
+
     # 4. Relative position captions - only makes sense if we have an ego kart
     if ego:
         MARGIN = 6
@@ -60,7 +60,7 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
             if position_parts:
                 position = " and ".join(position_parts)
                 captions.append(f"{k['kart_name']} is {position} of the ego car.")
-    
+
     return captions
 
 def check_caption(info_file: str, view_index: int):
@@ -99,31 +99,50 @@ def generate(split: str = "train", output_file: str = None, num_views: int = Non
     info_files = sorted(split_dir.glob("*_info.json"))
     print(f"Processing {len(info_files)} info files from {split_dir}")
     
+    processed_count = 0
+    error_count = 0
+    
     for info_path in info_files:
-        # Load info to get number of views
-        with open(info_path) as f:
-            info = json.load(f)
-        
-        num_views = len(info.get("views", []))
-        
-        # Process each view
-        for view_index in range(num_views):
-            # Generate captions for this view
-            captions = generate_captions(str(info_path), view_index)
+        try:
+            # Load info to get number of views
+            with open(info_path) as f:
+                info = json.load(f)
             
-            if not captions:
-                continue
+            num_views = len(info.get("views", []))
             
-            # Construct image file path relative to data directory
-            base_name = info_path.stem.replace("_info", "")
-            img_file = f"{split}/{base_name}_{view_index:02d}_im.jpg"
-            
-            # Create caption pairs
-            for caption in captions:
-                all_caption_pairs.append({
-                    "image_file": img_file,
-                    "caption": caption
-                })
+            # Process each view
+            for view_index in range(num_views):
+                try:
+                    # Generate captions for this view
+                    captions = generate_captions(str(info_path), view_index)
+                    
+                    if not captions:
+                        continue
+                    
+                    # Construct image file path relative to data directory
+                    base_name = info_path.stem.replace("_info", "")
+                    img_file = f"{split}/{base_name}_{view_index:02d}_im.jpg"
+                    
+                    # Create caption pairs
+                    for caption in captions:
+                        all_caption_pairs.append({
+                            "image_file": img_file,
+                            "caption": caption
+                        })
+                    
+                    processed_count += 1
+                    if processed_count % 100 == 0:
+                        print(f"Processed {processed_count} views, generated {len(all_caption_pairs)} caption pairs so far...")
+                        
+                except Exception as e:
+                    error_count += 1
+                    if error_count <= 5:  # Only print first few errors
+                        print(f"Error processing {info_path.name} view {view_index}: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error loading {info_path}: {e}")
+            continue
     
     # Save to JSON
     with open(output_file, "w") as f:
@@ -132,6 +151,9 @@ def generate(split: str = "train", output_file: str = None, num_views: int = Non
     # Print statistics
     print(f"\nGenerated {len(all_caption_pairs)} caption pairs")
     print(f"Saved to {output_file}")
+    print(f"Processed {processed_count} views successfully")
+    if error_count > 0:
+        print(f"Encountered {error_count} errors during processing")
     
     # Calculate statistics
     unique_images = len(set(pair["image_file"] for pair in all_caption_pairs))
