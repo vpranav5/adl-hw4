@@ -47,7 +47,27 @@ def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_
 
     return captions
 
+def check_caption(info_file: str, view_index: int):
+    captions = generate_caption(info_file, view_index)
 
+    print("\nCaption:")
+    print("-" * 50)
+    for i, caption in enumerate(captions):
+        print(f"{i + 1}. {caption}")
+        print("-" * 50)
+
+    info_path = Path(info_file)
+    base_name = info_path.stem.replace("_info", "")
+    image_file = list(info_path.parent.glob(f"{base_name}_{view_index:02d}_im.jpg"))[0]
+
+    annotated_image = draw_detections(str(image_file), info_file)
+
+    plt.figure(figsize=(12, 8))
+    plt.imshow(annotated_image)
+    plt.axis("off")
+    plt.title(f"Frame {extract_frame_info(str(image_file))[0]}, View {view_index}")
+    plt.show()
+    
 def generate(split: str = "train", output_file: str = None, num_views: int = 5):
     """
     Generate caption dataset for CLIP training.
