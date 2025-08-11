@@ -237,12 +237,18 @@ def generate_qa_pairs(info_path: str, view_index: int,
     track_name = extract_track_info(info_path)
     
     # Find ego kart
-    ego_kart = None
-    for kart in karts:
-        if kart.get("is_center_kart", False):
-            ego_kart = kart
-            break
+    # ego_kart = None
+    # for kart in karts:
+    #     if kart.get("is_center_kart", False):
+    #         ego_kart = kart
+    #         break
     
+    # if ego_kart is None:
+    #     return []  # No ego kart found, skip this view
+    ego_kart = next((k for k in karts if k["instance_id"] == 0), None)
+    if ego_kart is None:
+        ego_kart = next((k for k in karts if k.get("is_center_kart", False)), None)
+
     if ego_kart is None:
         return []  # No ego kart found, skip this view
 
