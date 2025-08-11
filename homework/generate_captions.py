@@ -15,53 +15,34 @@ import json
 def generate_caption(info_path: str, view_index: int, img_width: int = 150, img_height: int = 100):
     karts = extract_kart_objects(info_path, view_index, img_width, img_height)
     track_name = extract_track_info(info_path)
-    
-    captions = []
-    
-    # Find ego kart (center kart or instance_id 0)
-    ego = None
+    ego = next((k for k in karts if k.get("is_center_kart") or k["instance_id"] == 0), None)
+    if ego is None:
+        return []
+
+    MARGIN = 6
+    caps = [f"The track is {track_name}.",
+            f"There are {len(karts)} karts."]
+    if not ego["kart_name"].startswith("kart_"):
+        caps.append(f"The ego kart is {ego['kart_name']}.")
+
+    def rel(dx, dy):
+        parts = []
+        if dy <= -MARGIN: parts.append("front")
+        elif dy >= MARGIN: parts.append("back")
+        if dx <= -MARGIN: parts.append("left")
+        elif dx >= MARGIN: parts.append("right")
+        return " and ".join(parts)
+
     for k in karts:
-        if k.get("is_center_kart") or k["instance_id"] == 0:
-            ego = k
-            break
-    
-    # 1. Ego car caption
-    if ego:
-        captions.append(f"{ego['kart_name']} is the ego car.")
-    
-    # 2. Counting caption
-    captions.append(f"There are {len(karts)} karts in the scenario.")
-    
-    # 3. Track name caption
-    captions.append(f"The track is {track_name}.")
-    
-    # 4. Relative position captions - only makes sense if we have an ego kart
-    if ego:
-        MARGIN = 6
-        
-        for k in karts:
-            if k["instance_id"] == ego["instance_id"]:
-                continue
-                
-            dx = k["center"][0] - ego["center"][0]
-            dy = k["center"][1] - ego["center"][1]
-            
-            position_parts = []
-            if dy <= -MARGIN:
-                position_parts.append("in front")
-            elif dy >= MARGIN:
-                position_parts.append("behind")
-                
-            if dx <= -MARGIN:
-                position_parts.append("to the left")
-            elif dx >= MARGIN:
-                position_parts.append("to the right")
-            
-            if position_parts:
-                position = " and ".join(position_parts)
-                captions.append(f"{k['kart_name']} is {position} of the ego car.")
-    
-    return captions
+        if k["instance_id"] == ego["instance_id"]:
+            continue
+        dx = k["center"][0] - ego["center"][0]
+        dy = k["center"][1] - ego["center"][1]
+        r = rel(dx, dy)
+        if r:
+            caps.append(f"{k['kart_name']} is {r} of the ego car.")
+
+    return caps
 
 def check_caption(info_file: str, view_index: int):
     captions = generate_caption(info_file, view_index)
@@ -86,96 +67,24 @@ def check_caption(info_file: str, view_index: int):
 
 def generate(split: str = "train", output_file: str = None, num_views: int = None):
     split_dir = Path("data") / split
-    
-    # Default output file
-    if output_file is None:
-        output_file = split_dir / "all_captions.json"
-    else:
-        output_file = Path(output_file)
-    
-    all_caption_pairs = []
-    
-    # Process all info files in the split
+    output_file = output_file or (split_dir / "all_captions.json")  # ends with _captions.json
+
+    all_caps = []
     info_files = sorted(split_dir.glob("*_info.json"))
-    print(f"Processing {len(info_files)} info files from {split_dir}")
-    
-    processed_count = 0
-    error_count = 0
-    skipped_no_ego = 0
-    
+
     for info_path in info_files:
-        try:
-            # Load info to get number of views
-            with open(info_path) as f:
-                info = json.load(f)
-            
-            # Get number of views from detections length (same as generate_qa.py)
-            num_views = len(info.get("detections", []))
-            
-            # Limit to 5 views max (same as generate_qa default)
-            num_views = min(num_views, 5)
-            
-            # Process each view
-            for view_index in range(num_views):
-                try:
-                    # Check if corresponding image file exists
-                    base_name = info_path.stem.replace("_info", "")
-                    image_path = split_dir / f"{base_name}_{view_index:02d}_im.jpg"
-                    
-                    if not image_path.exists():
-                        continue  # Skip if image doesn't exist
-                    
-                    # Generate captions for this view
-                    captions = generate_caption(str(info_path), view_index)
-                    
-                    if not captions or len(captions) <= 1:  # Skip if only track/count captions (no ego)
-                        skipped_no_ego += 1
-                        continue
-                    
-                    # Construct image file path relative to data directory
-                    img_file = f"{split}/{base_name}_{view_index:02d}_im.jpg"
-                    
-                    # Create caption pairs
-                    for caption in captions:
-                        all_caption_pairs.append({
-                            "image_file": img_file,
-                            "caption": caption
-                        })
-                    
-                    processed_count += 1
-                    if processed_count % 100 == 0:
-                        print(f"Processed {processed_count} views, generated {len(all_caption_pairs)} caption pairs so far...")
-                        
-                except Exception as e:
-                    error_count += 1
-                    if error_count <= 5:  # Only print first few errors
-                        print(f"Error processing {info_path.name} view {view_index}: {e}")
-                    continue
-                    
-        except Exception as e:
-            print(f"Error loading {info_path}: {e}")
-            continue
-    
-    # Save to JSON
+        for view_index in range(num_views):
+            caps = generate_caption(str(info_path), view_index)
+            if not caps:
+                continue
+            image_file = f"{split}/{info_path.stem.replace('_info', f'_{view_index:02d}_im.jpg')}"
+            for c in caps:
+                all_caps.append({"image_file": image_file, "caption": c})
+
     with open(output_file, "w") as f:
-        json.dump(all_caption_pairs, f, indent=2)
-    
-    # Print statistics
-    print(f"\nGenerated {len(all_caption_pairs)} caption pairs")
-    print(f"Saved to {output_file}")
-    print(f"Processed {processed_count} views successfully")
-    print(f"Skipped {skipped_no_ego} views with no ego kart")
-    if error_count > 0:
-        print(f"Encountered {error_count} errors during processing")
-    
-    # Calculate statistics
-    unique_images = len(set(pair["image_file"] for pair in all_caption_pairs))
-    if unique_images > 0:
-        avg_captions = len(all_caption_pairs) / unique_images
-        print(f"Unique images: {unique_images}")
-        print(f"Average captions per image: {avg_captions:.2f}")
-    
-    return all_caption_pairs
+        json.dump(all_caps, f, indent=2)
+
+    print(f"Saved {len(all_caps)} captions to {output_file}")
 
 
 """

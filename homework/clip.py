@@ -109,16 +109,9 @@ class CLIP(nn.Module):
         self.vision_encoder = vision_encoder
         self.text_encoder = text_encoder
         
-        vision_dim = self.vision_encoder.config.hidden_size
-        # Text encoder output dimension (from text_model.config.hidden_size)
-        text_dim = self.text_encoder.config.hidden_size
-        
-        # Create projection layers to map both vision and text to common embedding space
-        self.vision_projection = nn.Linear(vision_dim, proj_dim)
-        self.text_projection = nn.Linear(text_dim, proj_dim)
-        
-        # Temperature parameter for scaling logits (as in CLIP paper)
-        self.temperature = nn.Parameter(torch.ones([]) * temperature)
+        self.vision_proj = nn.Linear(vision_encoder.config.hidden_size, proj_dim, bias=False)
+        self.text_proj = nn.Linear(text_encoder.config.hidden_size, proj_dim, bias=False)
+        self.logit_scale = nn.Parameter(torch.tensor(math.log(1 / temperature)))
         
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
@@ -198,48 +191,24 @@ class CLIP(nn.Module):
             TODO: think about the what values should be returned
         """
        
-        vision_outputs = self.vision_encoder(pixel_values)
-        # Get the pooled output (CLS token for vision transformer)
-        vision_features = vision_outputs.pooler_output  # (batch_size, vision_dim)
-        
-        # Encode text
-        text_outputs = self.text_encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        
-        # Based on the note about not using CLS token, use average pooling instead
-        # Get hidden states and apply average pooling over sequence length
-        hidden_states = text_outputs.last_hidden_state  # (batch_size, seq_len, text_dim)
-        
-        # Apply attention mask for proper averaging (ignore padding tokens)
-        if attention_mask is not None:
-            # Expand mask to match hidden states dimension
-            mask_expanded = attention_mask.unsqueeze(-1).expand(hidden_states.size()).float()
-            # Apply mask and sum
-            sum_embeddings = torch.sum(hidden_states * mask_expanded, dim=1)
-            # Get the number of non-padding tokens for averaging
-            sum_mask = mask_expanded.sum(dim=1)
-            sum_mask = torch.clamp(sum_mask, min=1e-9)  # Avoid division by zero
-            # Average pooling
-            text_features = sum_embeddings / sum_mask  # (batch_size, text_dim)
-        else:
-            # If no mask, just average over sequence length
-            text_features = torch.mean(hidden_states, dim=1)  # (batch_size, text_dim)
-        
-        # Project both features to common embedding space
-        vision_features = self.vision_projection(vision_features)  # (batch_size, proj_dim)
-        text_features = self.text_projection(text_features)  # (batch_size, proj_dim)
-        
-        # L2 normalize features (as in CLIP paper)
-        vision_features = F.normalize(vision_features, p=2, dim=-1)
-        text_features = F.normalize(text_features, p=2, dim=-1)
-        
-        # Compute similarity scores (cosine similarity scaled by temperature)
-        # This gives us the logits matrix used in contrastive loss
-        logits = torch.matmul(vision_features, text_features.T) / self.temperature  # (batch_size, batch_size)
-        
-        return vision_features, text_features, logits
+        vision_outputs = self.vision_encoder(pixel_values).last_hidden_state
+        vision_feat = vision_outputs.mean(dim=1)  # Average pool over sequence
+        vision_emb = self.vision_proj(vision_feat)
+
+        text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        eos_token_id = processor.tokenizer.eos_token_id
+        eos_mask = (input_ids == eos_token_id).int()
+        eos_pos = eos_mask.argmax(dim=1)
+        text_feat = text_outputs[torch.arange(input_ids.shape[0]), eos_pos, :]
+        text_emb = self.text_proj(text_feat)
+
+        vision_emb = F.normalize(vision_emb, dim=-1)
+        text_emb = F.normalize(text_emb, dim=-1)
+
+        logit_scale = self.logit_scale.exp()
+        logits_per_image = logit_scale * vision_emb @ text_emb.T
+
+        return vision_emb, text_emb, logits_per_image
 
 def compute_clip_loss(
     outputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
@@ -257,26 +226,12 @@ def compute_clip_loss(
     Returns:
         The loss for the CLIP model.
     """
-    vision_features, text_features, logits = outputs
-    
-    # Get batch size
-    batch_size = logits.shape[0]
-    
-    # Create ground truth labels - diagonal matrix
-    # Each image should match with its corresponding text (diagonal elements)
-    ground_truth = torch.arange(batch_size, dtype=torch.long, device=logits.device)
-    
-    # Compute cross-entropy loss for both directions (as in CLIP paper)
-    # Image-to-text loss: for each image, which text matches best?
-    loss_i2t = F.cross_entropy(logits, ground_truth)
-    
-    # Text-to-image loss: for each text, which image matches best?
-    loss_t2i = F.cross_entropy(logits.T, ground_truth)
-    
-    # Total loss is the average of both directions
-    total_loss = (loss_i2t + loss_t2i) / 2.0
-    
-    return total_loss
+    vision_emb, text_emb, logits_per_image = outputs
+    logits_per_text = logits_per_image.T
+    targets = torch.arange(len(logits_per_image), device=logits_per_image.device)
+    loss_i = F.cross_entropy(logits_per_image, targets)
+    loss_t = F.cross_entropy(logits_per_text, targets)
+    return (loss_i + loss_t) / 2
 
 def get_target_modules_for_lora(model: nn.Module) -> list[str]:
     target_modules = []
