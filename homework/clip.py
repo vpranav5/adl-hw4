@@ -502,7 +502,14 @@ def test(ckpt_path: str, val_dataset: str = "valid_grader"):
             attention_mask = text_inputs["attention_mask"].to(device)
 
             # Use model's logits directly (image x text)
-            _, _, logits = clip(pixel_values, input_ids, attention_mask)  # [1, num_candidates]
+            # _, _, logits = clip(pixel_values, input_ids, attention_mask)  # [1, num_candidates]
+            # pred = logits.argmax(dim=-1).item()
+            _, _, logits = clip(
+                pixel_values=pixel_values,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+            
             pred = logits.argmax(dim=-1).item()
 
             if pred == int(pair["correct_index"]):
