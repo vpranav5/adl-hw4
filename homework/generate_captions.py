@@ -160,7 +160,7 @@ def generate(split: str = "train", output_file: str = None, num_views: int = Non
                 continue
             
             # Generate captions
-            captions = generate_captions(str(info_path), view_index)
+            captions = generate_caption(str(info_path), view_index)
             
             if not captions:
                 skipped_count += 1
